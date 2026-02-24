@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaw",
+  "version": "2.0",
+  "description": "Reading tracker and annotation tool",
+  "permissions": ["storage", "contextMenus", "activeTab", "tabs", "scripting"],
+  "host_permissions": ["https://api.telegram.org/*", "<all_urls>"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "options_page": "options.html"
+}

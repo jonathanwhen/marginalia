@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
+    body { max-width: 480px; margin: 40px auto; padding: 0 20px; background: #0a0a0a; color: #e0e0e0; }
+    h1 { font-size: 18px; margin-bottom: 24px; display: flex; align-items: center; gap: 8px; }
+    .field { margin-bottom: 18px; }
+    label { display: block; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    input { width: 100%; background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; color: #e0e0e0; font-size: 13px; padding: 10px 12px; outline: none; }
+    input:focus { border-color: #e8a87c; }
+    button { background: #e8a87c; color: #0a0a0a; border: none; border-radius: 6px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .saved { color: #6fcf97; font-size: 12px; margin-left: 12px; display: none; }
+    .hint { font-size: 11px; color: #444; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>🦞 OpenClaw Settings</h1>
+
+  <div class="field">
+    <label>Telegram Bot Token</label>
+    <input type="text" id="botToken" placeholder="123456789:ABCdef..." />
+    <div class="hint">From @BotFather — keep this private</div>
+  </div>
+
+  <div class="field">
+    <label>Your Telegram Chat ID</label>
+    <input type="text" id="chatId" placeholder="8705071628" />
+    <div class="hint">Your numeric Telegram user ID</div>
+  </div>
+
+  <button id="save">Save</button>
+  <span class="saved" id="saved-msg">Saved ✓</span>
+
+  <script>
+    chrome.storage.sync.get(['botToken', 'chatId'], ({ botToken, chatId }) => {
+      if (botToken) document.getElementById('botToken').value = botToken;
+      if (chatId) document.getElementById('chatId').value = chatId;
+    });
+
+    document.getElementById('save').addEventListener('click', () => {
+      const botToken = document.getElementById('botToken').value.trim();
+      const chatId = document.getElementById('chatId').value.trim();
+      chrome.storage.sync.set({ botToken, chatId }, () => {
+        const msg = document.getElementById('saved-msg');
+        msg.style.display = 'inline';
+        setTimeout(() => { msg.style.display = 'none'; }, 2000);
+      });
+    });
+  </script>
+</body>
+</html>

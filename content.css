@@ -1,0 +1,115 @@
+.oc-highlight {
+  background: rgba(232, 168, 124, 0.35);
+  border-bottom: 1.5px solid rgba(232, 168, 124, 0.8);
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.oc-highlight:hover {
+  background: rgba(232, 168, 124, 0.55);
+}
+.oc-highlight-comment {
+  background: rgba(111, 207, 151, 0.3);
+  border-bottom: 1.5px solid rgba(111, 207, 151, 0.8);
+}
+
+#oc-toolbar {
+  position: fixed;
+  z-index: 2147483647;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  font-family: -apple-system, sans-serif;
+  font-size: 12px;
+  pointer-events: all;
+}
+#oc-toolbar button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #ccc;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+#oc-toolbar button:hover { background: #222; color: #fff; }
+#oc-toolbar .oc-divider { width: 1px; height: 16px; background: #333; }
+
+#oc-comment-box {
+  position: fixed;
+  z-index: 2147483647;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 12px;
+  width: 280px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+  font-family: -apple-system, sans-serif;
+}
+#oc-comment-box textarea {
+  width: 100%;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 8px;
+  outline: none;
+  resize: none;
+  height: 80px;
+  font-family: -apple-system, sans-serif;
+}
+#oc-comment-box textarea:focus { border-color: #e8a87c; }
+#oc-comment-box .oc-cb-actions { display: flex; gap: 6px; margin-top: 8px; }
+#oc-comment-box button {
+  flex: 1;
+  padding: 6px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+#oc-comment-box .oc-save { background: #e8a87c; color: #0a0a0a; }
+#oc-comment-box .oc-cancel { background: #222; color: #888; }
+
+#oc-note-bubble {
+  position: fixed;
+  z-index: 2147483647;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  width: 260px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  font-family: -apple-system, sans-serif;
+  font-size: 12px;
+  color: #ccc;
+  max-height: 200px;
+  overflow-y: auto;
+}
+#oc-note-bubble .oc-nb-quote {
+  color: #e8a87c;
+  font-style: italic;
+  margin-bottom: 6px;
+  border-left: 2px solid #e8a87c;
+  padding-left: 8px;
+  font-size: 11px;
+}
+#oc-note-bubble .oc-nb-comment { color: #aaa; font-size: 12px; }
+#oc-note-bubble .oc-nb-delete {
+  display: block;
+  margin-top: 8px;
+  color: #555;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: right;
+}
+#oc-note-bubble .oc-nb-delete:hover { color: #eb5757; }
