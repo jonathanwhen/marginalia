@@ -5,11 +5,17 @@
   "description": "Reading tracker and annotation tool",
   "permissions": ["storage", "contextMenus", "activeTab", "tabs", "scripting"],
   "host_permissions": ["https://api.telegram.org/*", "<all_urls>"],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
-      "48": "icon48.png"
+      "48": "icon48.png",
+      "128": "icon128.png"
     }
   },
   "background": {
