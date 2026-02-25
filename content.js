@@ -62,8 +62,9 @@
     }
   }
 
-  // Returns the created <mark> element (or null on failure)
+  // Returns the first created <mark> element (or null on failure)
   function wrapRange(range, h) {
+    // Try simple surroundContents first (works when selection is within one element)
     try {
       const mark = document.createElement('mark');
       mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
@@ -76,8 +77,49 @@
       });
       return mark;
     } catch (e) {
-      return null;
+      // Cross-element selection — wrap each text node individually
+      return wrapRangeMulti(range, h);
     }
+  }
+
+  // Handles selections that span multiple DOM elements by wrapping each text node separately
+  function wrapRangeMulti(range, h) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(
+      range.commonAncestorContainer,
+      NodeFilter.SHOW_TEXT
+    );
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node)) textNodes.push(node);
+    }
+    if (textNodes.length === 0) return null;
+
+    let firstMark = null;
+    for (const tNode of textNodes) {
+      let start = 0;
+      let end = tNode.nodeValue.length;
+      if (tNode === range.startContainer) start = range.startOffset;
+      if (tNode === range.endContainer) end = range.endOffset;
+      if (start >= end) continue;
+
+      // Split off the portion after our selection (must happen before the start split)
+      if (end < tNode.nodeValue.length) tNode.splitText(end);
+      const target = start > 0 ? tNode.splitText(start) : tNode;
+
+      const mark = document.createElement('mark');
+      mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+      mark.dataset.ocId = h.id;
+      mark.title = h.comment || '';
+      target.parentNode.insertBefore(mark, target);
+      mark.appendChild(target);
+      mark.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!highlightMode) showNoteBubble(mark, h);
+      });
+      if (!firstMark) firstMark = mark;
+    }
+    return firstMark;
   }
 
   // ── Highlight mode ─────────────────────────────────────────────
@@ -120,13 +162,12 @@
       return;
     }
     if (msg.type === 'oc-delete-highlight') {
-      const mark = document.querySelector(`mark[data-oc-id="${msg.id}"]`);
-      if (mark) {
+      document.querySelectorAll(`mark[data-oc-id="${msg.id}"]`).forEach(mark => {
         const parent = mark.parentNode;
         while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
         parent.removeChild(mark);
         parent.normalize();
-      }
+      });
       sendResponse({ ok: true });
     }
   });
@@ -344,8 +385,6 @@
     // Dedup guard: reject identical text saved within 2 seconds
     const now = Date.now();
     if (text === lastSavedText && now - lastSavedTime < 2000) return;
-    lastSavedText = text;
-    lastSavedTime = now;
 
     const h = {
       id: now.toString(),
@@ -353,11 +392,18 @@
       comment,
       timestamp: new Date().toISOString()
     };
+
+    // Wrap in DOM first — only persist if the visual highlight succeeds
+    const mark = wrapRange(range, h);
+    if (!mark) return;
+
+    lastSavedText = text;
+    lastSavedTime = now;
+    window.getSelection()?.removeAllRanges();
+
     getHighlights(highlights => {
       highlights.push(h);
       saveHighlights(highlights, () => {
-        const mark = wrapRange(range, h);
-        window.getSelection()?.removeAllRanges();
         notifyHighlightChanged('create', text, h.id);
         if (onDone) onDone(h, mark);
       });
@@ -365,10 +411,13 @@
   }
 
   function deleteHighlight(id, markEl) {
-    const parent = markEl.parentNode;
-    while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
-    parent.removeChild(markEl);
-    parent.normalize();
+    // Remove all marks with this id (multi-element highlights create several <mark>s)
+    document.querySelectorAll(`mark[data-oc-id="${id}"]`).forEach(mark => {
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    });
     getHighlights(highlights => {
       saveHighlights(highlights.filter(h => h.id !== id));
     });
