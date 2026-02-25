@@ -206,7 +206,11 @@ document.getElementById('hl-mode-btn').addEventListener('click', async () => {
   } catch (e) {}
 
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'oc-toggle-highlight-mode' });
+    const result = await chrome.tabs.sendMessage(tab.id, { type: 'oc-toggle-highlight-mode' });
+    if (result?.pdf) {
+      showToast('PDFs don\u2019t support visual highlighting \u2014 use right-click \u2192 Highlight with OpenClaw', 'error');
+      return;
+    }
   } catch (e) {}
 
   window.close();

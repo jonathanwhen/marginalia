@@ -12,6 +12,7 @@
   let modeBanner = null;
 
   const pageKey = () => location.origin + location.pathname;
+  const isPdf = document.contentType === 'application/pdf' || location.pathname.toLowerCase().endsWith('.pdf');
 
   // ── Storage helpers ──────────────────────────────────────────────
   function isContextValid() {
@@ -151,12 +152,16 @@
   // Listen for messages from popup
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'oc-toggle-highlight-mode') {
+      if (isPdf) {
+        sendResponse({ ok: false, pdf: true });
+        return;
+      }
       if (highlightMode) exitHighlightMode();
       else enterHighlightMode();
       sendResponse({ ok: true });
     }
     if (msg.type === 'oc-get-word-count') {
-      sendResponse({ wordCount: getArticleWordCount() });
+      sendResponse({ wordCount: isPdf ? 0 : getArticleWordCount() });
       return;
     }
     if (msg.type === 'oc-delete-highlight') {
@@ -410,6 +415,9 @@
     const text = (el.innerText || el.textContent || '').trim();
     return text.split(/\s+/).filter(w => w.length > 0).length;
   }
+
+  // ── PDF: skip DOM-based highlighting (context menu captures still work via background.js)
+  if (isPdf) return;
 
   // ── Selection listener ───────────────────────────────────────────
   document.addEventListener('mouseup', e => {
