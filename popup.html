@@ -53,12 +53,15 @@
     .toast.success { color: #6fcf97; }
     .toast.error { color: #eb5757; }
 
-    .settings-link {
-      display: block; text-align: center; padding: 7px;
-      font-size: 10px; color: #333; text-decoration: none;
-      border-top: 1px solid #161616;
+    .footer-links {
+      display: flex; border-top: 1px solid #161616;
     }
-    .settings-link:hover { color: #555; }
+    .footer-links .settings-link {
+      flex: 1; text-align: center; padding: 7px;
+      font-size: 10px; color: #333; text-decoration: none;
+    }
+    .footer-links .settings-link:hover { color: #555; }
+    .footer-links .settings-link + .settings-link { border-left: 1px solid #161616; }
 
     /* Flush bar */
     .flush-bar { padding: 6px 14px; border-bottom: 1px solid #1e1e1e; }
@@ -159,7 +162,10 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <a href="#" class="settings-link" id="open-settings">⚙ Settings</a>
+  <div class="footer-links">
+    <a href="#" class="settings-link" id="open-dashboard">📊 Reading Log</a>
+    <a href="#" class="settings-link" id="open-settings">⚙ Settings</a>
+  </div>
 
   <script src="popup.js"></script>
 </body>

@@ -14,6 +14,11 @@ document.getElementById('open-settings').addEventListener('click', e => {
   chrome.runtime.openOptionsPage();
 });
 
+document.getElementById('open-dashboard').addEventListener('click', e => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+});
+
 // ── Tag selection ─────────────────────────────────────────────────
 function setupTags(containerId) {
   document.querySelectorAll(`#${containerId} .tag-btn`).forEach(btn => {
