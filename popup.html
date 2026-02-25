@@ -92,7 +92,7 @@
   <div class="header">
     <span class="logo">🦞</span>
     <span class="title">OpenClaw</span>
-    <span class="pg-count" id="today-count"></span>
+    <span class="pg-count" id="today-count">0/150 pages today</span>
   </div>
 
   <div class="tabs">
@@ -114,6 +114,10 @@
     <div class="field">
       <label>Author</label>
       <input type="text" id="log-author" placeholder="—" />
+    </div>
+    <div class="field">
+      <label>Est. Pages</label>
+      <input type="number" id="log-est-pages" min="0" placeholder="Auto-estimated from word count" />
     </div>
     <div class="field">
       <label>Source URL</label>
@@ -145,23 +149,13 @@
     </div>
   </div>
 
-  <!-- General note -->
+  <!-- Note for this reading -->
   <div class="panel" id="panel-note">
     <div class="field">
-      <label>Note</label>
-      <textarea id="note-input" rows="5" placeholder="Quick thought, idea, or insight..."></textarea>
+      <label>Note for this reading</label>
+      <textarea id="note-input" rows="5" placeholder="Key takeaways, thoughts, or insights for this reading..."></textarea>
     </div>
-    <div class="field">
-      <label>Tags</label>
-      <div class="tags-wrap" id="note-tags-wrap">
-        <button class="tag-btn" data-tag="AI/ML Research">AI/ML</button>
-        <button class="tag-btn" data-tag="Healthcare/Bio">Healthcare</button>
-        <button class="tag-btn" data-tag="General Learning">General</button>
-        <button class="tag-btn" data-tag="Framework/Mental Model">Framework</button>
-        <button class="tag-btn" data-tag="Future Exploration">Future Exp.</button>
-      </div>
-    </div>
-    <button class="send-btn" id="note-send">Send Note</button>
+    <button class="send-btn" id="note-send">Save Note</button>
   </div>
 
   <div class="toast" id="toast"></div>

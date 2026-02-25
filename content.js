@@ -96,6 +96,10 @@
       else enterHighlightMode();
       sendResponse({ ok: true });
     }
+    if (msg.type === 'oc-get-word-count') {
+      sendResponse({ wordCount: getArticleWordCount() });
+      return;
+    }
     if (msg.type === 'oc-delete-highlight') {
       const mark = document.querySelector(`mark[data-oc-id="${msg.id}"]`);
       if (mark) {
@@ -166,10 +170,7 @@
       if (existing) existing.comment = comment;
       saveHighlights(highlights);
     });
-    enqueueViaBackground(
-      `annotation: "${comment}"\non: "${h.text.slice(0, 100)}"\nsource: ${location.href}`,
-      h.id
-    );
+    notifyHighlightChanged('update', h.text, h.id);
   }
 
   // ── Toolbar (used outside highlight mode) ──────────────────────
@@ -329,10 +330,7 @@
       saveHighlights(highlights, () => {
         const mark = wrapRange(range, h);
         window.getSelection()?.removeAllRanges();
-        enqueueViaBackground(
-          `highlight: "${text.slice(0, 200)}"${comment ? `\ncomment: ${comment}` : ''}\nsource: ${location.href}`,
-          h.id
-        );
+        notifyHighlightChanged('create', text, h.id);
         if (onDone) onDone(h, mark);
       });
     });
@@ -346,13 +344,28 @@
     getHighlights(highlights => {
       saveHighlights(highlights.filter(h => h.id !== id));
     });
-    // Remove any queued outbox messages for this highlight
-    chrome.runtime.sendMessage({ type: 'oc-dequeue-highlight', highlightId: id });
+    notifyHighlightChanged('delete', '', id);
   }
 
-  // ── Queue via background service worker ─────────────────────────
-  function enqueueViaBackground(text, highlightId) {
-    chrome.runtime.sendMessage({ type: 'oc-enqueue', text, highlightId });
+  // ── Notify background of highlight changes ─────────────────────
+  // action: 'create' | 'update' | 'delete'
+  function notifyHighlightChanged(action, text, highlightId) {
+    chrome.runtime.sendMessage({
+      type: 'oc-highlight-changed',
+      pageKey: pageKey(),
+      action,
+      text,
+      highlightId
+    });
+  }
+
+  // ── Word count helper ─────────────────────────────────────────────
+  function getArticleWordCount() {
+    const el = document.querySelector('article')
+      || document.querySelector('[role="main"]')
+      || document.body;
+    const text = (el.innerText || el.textContent || '').trim();
+    return text.split(/\s+/).filter(w => w.length > 0).length;
   }
 
   // ── Selection listener ───────────────────────────────────────────

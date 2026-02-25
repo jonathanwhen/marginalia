@@ -21,11 +21,18 @@ function setupTags(containerId) {
   });
 }
 setupTags('tags-wrap');
-setupTags('note-tags-wrap');
 
 function getSelectedTags(containerId) {
   return [...document.querySelectorAll(`#${containerId} .tag-btn.selected`)]
     .map(b => b.dataset.tag);
+}
+
+// Select tags by value (for pre-filling from existing reading)
+function selectTags(containerId, tags) {
+  document.querySelectorAll(`#${containerId} .tag-btn`).forEach(btn => {
+    if (tags.includes(btn.dataset.tag)) btn.classList.add('selected');
+    else btn.classList.remove('selected');
+  });
 }
 
 // ── Toast ─────────────────────────────────────────────────────────
@@ -37,24 +44,14 @@ function showToast(msg, type = 'success') {
   setTimeout(() => { t.style.display = 'none'; }, 2500);
 }
 
-// ── Enqueue via background ────────────────────────────────────────
-async function enqueueMessage(text) {
-  try {
-    await chrome.runtime.sendMessage({ type: 'oc-enqueue', text });
-    await updatePendingCount();
-    return true;
-  } catch (e) {
-    showToast(`Queue error: ${e.message}`, 'error');
-    return false;
-  }
-}
-
 // ── Pending count + flush button ──────────────────────────────────
 const flushBtn = document.getElementById('oc-flush-btn');
 
 async function updatePendingCount() {
-  const { ocOutbox = [] } = await chrome.storage.local.get('ocOutbox');
-  const count = ocOutbox.length;
+  // Count dirty readings + standalone outbox items
+  const { ocReadings = {}, ocOutbox = [] } = await chrome.storage.local.get(['ocReadings', 'ocOutbox']);
+  const dirtyCount = Object.values(ocReadings).filter(r => r.dirty).length;
+  const count = dirtyCount + ocOutbox.length;
   flushBtn.textContent = count > 0 ? `Send Now (${count})` : 'Send Now';
   flushBtn.disabled = count === 0;
 }
@@ -77,60 +74,109 @@ flushBtn.addEventListener('click', async () => {
     showToast(`Flush error: ${e.message}`, 'error');
   }
   await updatePendingCount();
+  await updateTodayPages();
 });
 
-// ── Auto-fill from current tab ────────────────────────────────────
+// ── Page key for current tab ────────────────────────────────────────
+let currentPageKey = null;
+
+// ── Auto-fill from current tab or existing reading ──────────────────
 async function autofill() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
-  if (tab.title) document.getElementById('log-title').value = tab.title;
-  if (tab.url) document.getElementById('log-url').value = tab.url;
 
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        return (
-          document.querySelector('meta[name="author"]')?.content ||
-          document.querySelector('meta[property="article:author"]')?.content ||
-          document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
-          ''
-        );
+  currentPageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
+
+  // Check if a reading already exists for this page
+  const response = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
+  const reading = response?.reading;
+
+  if (reading) {
+    // Pre-fill from existing reading
+    document.getElementById('log-title').value = reading.title || '';
+    document.getElementById('log-author').value = reading.author || '';
+    document.getElementById('log-url').value = reading.url || tab.url;
+    document.getElementById('log-notes').value = reading.notes || '';
+    document.getElementById('log-est-pages').value = reading.estPages || '';
+    if (reading.tags?.length) selectTags('tags-wrap', reading.tags);
+    // Pre-fill note tab with existing notes
+    document.getElementById('note-input').value = reading.notes || '';
+    // Change button text to indicate update
+    document.getElementById('log-send').textContent = 'Update Reading';
+  } else {
+    // Auto-fill from tab metadata
+    if (tab.title) document.getElementById('log-title').value = tab.title;
+    if (tab.url) document.getElementById('log-url').value = tab.url;
+
+    // Extract author from page meta tags
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          return (
+            document.querySelector('meta[name="author"]')?.content ||
+            document.querySelector('meta[property="article:author"]')?.content ||
+            document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
+            ''
+          );
+        }
+      });
+      const author = results?.[0]?.result;
+      if (author) document.getElementById('log-author').value = author;
+    } catch (e) {}
+
+    // Estimate pages from word count
+    try {
+      // Ensure content script is injected
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content.js']
+      });
+      const wcResult = await chrome.tabs.sendMessage(tab.id, { type: 'oc-get-word-count' });
+      if (wcResult?.wordCount) {
+        const estPages = Math.round(wcResult.wordCount / 275);
+        document.getElementById('log-est-pages').value = estPages > 0 ? estPages : 1;
       }
-    });
-    const author = results?.[0]?.result;
-    if (author) document.getElementById('log-author').value = author;
-  } catch (e) {}
+    } catch (e) {}
+  }
 }
 
-// ── Log reading ───────────────────────────────────────────────────
+// ── Log / Update reading ────────────────────────────────────────────
 document.getElementById('log-send').addEventListener('click', async () => {
   const title = document.getElementById('log-title').value.trim();
   const author = document.getElementById('log-author').value.trim();
   const url = document.getElementById('log-url').value.trim();
   const notes = document.getElementById('log-notes').value.trim();
+  const estPages = parseInt(document.getElementById('log-est-pages').value, 10) || 0;
   const tags = getSelectedTags('tags-wrap');
 
   if (!title) { showToast('Title required', 'error'); return; }
+  if (!currentPageKey) { showToast('No page context', 'error'); return; }
 
-  // Save to local log
-  const { readingLog = [] } = await chrome.storage.local.get('readingLog');
-  readingLog.push({ title, author, url, notes, tags, timestamp: new Date().toISOString() });
-  await chrome.storage.local.set({ readingLog });
-
-  // Format and enqueue
-  let msg = `reading: ${title}`;
-  if (author) msg += ` by ${author}`;
-  if (tags.length) msg += `\ntags: ${tags.join(', ')}`;
-  if (url) msg += `\nurl: ${url}`;
-  if (notes) msg += `\nnotes: ${notes}`;
-
-  const ok = await enqueueMessage(msg);
-  if (ok) {
-    showToast('Queued');
-    document.getElementById('log-notes').value = '';
-    document.querySelectorAll('#tags-wrap .tag-btn').forEach(b => b.classList.remove('selected'));
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'oc-upsert-reading',
+      pageKey: currentPageKey,
+      title,
+      author,
+      url,
+      tags,
+      notes,
+      estPages
+    });
+    if (result?.ok) {
+      showToast(result.created ? 'Reading logged' : 'Reading updated');
+      document.getElementById('log-send').textContent = 'Update Reading';
+      // Sync note tab with updated notes
+      document.getElementById('note-input').value = notes;
+    } else {
+      showToast('Failed to save reading', 'error');
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`, 'error');
   }
+  await updatePendingCount();
+  await updateTodayPages();
 });
 
 // ── Highlight mode toggle ─────────────────────────────────────────
@@ -197,9 +243,15 @@ async function loadHighlights() {
         list.innerHTML = '<div class="hl-empty">No highlights on this page yet.<br>Select text to highlight.</div>';
       }
 
-      // Remove queued outbox messages for this highlight
+      // Notify background of highlight deletion (marks reading dirty or dequeues standalone)
       try {
-        await chrome.runtime.sendMessage({ type: 'oc-dequeue-highlight', highlightId: id });
+        await chrome.runtime.sendMessage({
+          type: 'oc-highlight-changed',
+          pageKey,
+          action: 'delete',
+          text: '',
+          highlightId: id
+        });
       } catch (e) {}
       await updatePendingCount();
 
@@ -211,27 +263,55 @@ async function loadHighlights() {
   });
 }
 
-// ── Note ──────────────────────────────────────────────────────────
+// ── Note (saves to reading) ──────────────────────────────────────
 document.getElementById('note-send').addEventListener('click', async () => {
   const note = document.getElementById('note-input').value.trim();
-  const tags = getSelectedTags('note-tags-wrap');
-  if (!note) return;
-  let msg = `note: ${note}`;
-  if (tags.length) msg += `\ntags: ${tags.join(', ')}`;
-  const ok = await enqueueMessage(msg);
-  if (ok) {
-    showToast('Queued');
-    document.getElementById('note-input').value = '';
-    document.querySelectorAll('#note-tags-wrap .tag-btn').forEach(b => b.classList.remove('selected'));
-  } else {
-    showToast('Failed to queue', 'error');
+  if (!note) { showToast('Note is empty', 'error'); return; }
+  if (!currentPageKey) { showToast('No page context', 'error'); return; }
+
+  try {
+    // Upsert reading with just the note (auto-creates minimal reading if none exists)
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const result = await chrome.runtime.sendMessage({
+      type: 'oc-upsert-reading',
+      pageKey: currentPageKey,
+      title: tab?.title || currentPageKey,
+      url: tab?.url || currentPageKey,
+      notes: note
+    });
+    if (result?.ok) {
+      showToast('Note saved');
+      // Sync log tab notes field
+      document.getElementById('log-notes').value = note;
+      // If this created a new reading, update the log button
+      if (result.created) {
+        document.getElementById('log-send').textContent = 'Update Reading';
+      }
+    } else {
+      showToast('Failed to save note', 'error');
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`, 'error');
   }
+  await updatePendingCount();
 });
 
 document.getElementById('note-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) document.getElementById('note-send').click();
 });
 
+// ── Today's page count ──────────────────────────────────────────────
+async function updateTodayPages() {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'oc-get-today-pages' });
+    const el = document.getElementById('today-count');
+    if (result) {
+      el.textContent = `${result.pages}/150 pages today`;
+    }
+  } catch (e) {}
+}
+
 // ── Init ──────────────────────────────────────────────────────────
 autofill();
 updatePendingCount();
+updateTodayPages();
