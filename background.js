@@ -199,13 +199,19 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
 }
 
 // ── Today's page count ──────────────────────────────────────────────
+// Uses local date (not UTC) so the day boundary aligns with the user's timezone
 async function getTodayPages() {
   const readings = await getReadings();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   let pages = 0;
   let count = 0;
   for (const r of Object.values(readings)) {
-    if (r.createdAt && r.createdAt.slice(0, 10) === todayStr) {
+    if (!r.createdAt) continue;
+    // Convert stored UTC createdAt to local date string for comparison
+    const local = new Date(r.createdAt);
+    const localStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+    if (localStr === todayStr) {
       pages += r.estPages || 0;
       count++;
     }
