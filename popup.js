@@ -53,30 +53,31 @@ function showToast(msg, type = 'success') {
 const flushBtn = document.getElementById('oc-flush-btn');
 
 async function updatePendingCount() {
-  // Count dirty readings + standalone outbox items
-  const { ocReadings = {}, ocOutbox = [] } = await chrome.storage.local.get(['ocReadings', 'ocOutbox']);
-  const dirtyCount = Object.values(ocReadings).filter(r => r.dirty).length;
-  const count = dirtyCount + ocOutbox.length;
-  flushBtn.textContent = count > 0 ? `Send Now (${count})` : 'Send Now';
+  const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
+  const count = Object.values(ocReadings).filter(r => !r.syncedAt || r.syncedAt < r.updatedAt).length;
+  flushBtn.textContent = count > 0 ? `Sync Now (${count})` : 'Sync Now';
   flushBtn.disabled = count === 0;
 }
 
 flushBtn.addEventListener('click', async () => {
   flushBtn.disabled = true;
-  flushBtn.textContent = 'Sending...';
+  flushBtn.textContent = 'Syncing...';
   try {
     const result = await chrome.runtime.sendMessage({ type: 'oc-flush' });
     if (result.error) {
       showToast(result.error, 'error');
     } else if (result.failed > 0) {
-      showToast(`Sent ${result.sent}, failed ${result.failed}`, 'error');
-    } else if (result.sent > 0) {
-      showToast(`Sent ${result.sent} item${result.sent > 1 ? 's' : ''}`);
+      const reasons = [];
+      if (result.githubOk === false) reasons.push('GitHub failed');
+      if (result.telegramOk === false) reasons.push('Telegram failed');
+      showToast(`Sync failed: ${reasons.join(', ') || 'unknown'}`, 'error');
+    } else if (result.synced > 0) {
+      showToast(`Synced ${result.synced} reading${result.synced > 1 ? 's' : ''}`);
     } else {
-      showToast('Nothing to send');
+      showToast('Nothing to sync');
     }
   } catch (e) {
-    showToast(`Flush error: ${e.message}`, 'error');
+    showToast(`Sync error: ${e.message}`, 'error');
   }
   await updatePendingCount();
   await updateTodayPages();

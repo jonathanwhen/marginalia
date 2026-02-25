@@ -11,6 +11,7 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ['selection']
   });
   migrateReadingLog();
+  migrateDirtyToSyncedAt();
   setupFlushAlarm();
   setupDailySummaryAlarm();
   updateBadge();
@@ -24,8 +25,27 @@ updateBadge();
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'oc-highlight') return;
   const text = info.selectionText.trim();
-  const msg = `highlight: "${text.slice(0, 300)}"\nsource: ${tab.url}`;
-  await enqueueMessage(msg);
+  const pageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
+
+  // Auto-create minimal reading if none exists
+  const readings = await getReadings();
+  if (!readings[pageKey]) {
+    await upsertReading({ pageKey, title: tab.title || pageKey, url: tab.url });
+  }
+
+  // Save highlight to per-page storage
+  const hlResult = await chrome.storage.local.get([pageKey]);
+  const highlights = hlResult[pageKey] || [];
+  highlights.push({
+    id: Date.now().toString(),
+    text: text.slice(0, 300),
+    comment: '',
+    timestamp: new Date().toISOString()
+  });
+  await chrome.storage.local.set({ [pageKey]: highlights });
+
+  // Mark reading as needing sync
+  await touchReading(pageKey);
 });
 
 // ── Reading storage helpers ─────────────────────────────────────────
@@ -38,10 +58,15 @@ async function saveReadings(readings) {
   await chrome.storage.local.set({ ocReadings: readings });
 }
 
-async function markReadingDirty(pageKey) {
+// Sync status is derived: reading needs sync when syncedAt is null or < updatedAt
+function needsSync(reading) {
+  return !reading.syncedAt || reading.syncedAt < reading.updatedAt;
+}
+
+// Update updatedAt timestamp — sync status derived from syncedAt < updatedAt
+async function touchReading(pageKey) {
   const readings = await getReadings();
   if (readings[pageKey]) {
-    readings[pageKey].dirty = true;
     readings[pageKey].updatedAt = new Date().toISOString();
     await saveReadings(readings);
     await updateBadge();
@@ -51,12 +76,11 @@ async function markReadingDirty(pageKey) {
 // ── Migration: convert old readingLog array → ocReadings map ────────
 async function migrateReadingLog() {
   const { readingLog, ocReadings } = await chrome.storage.local.get(['readingLog', 'ocReadings']);
-  if (!readingLog || !readingLog.length) return; // nothing to migrate
-  if (ocReadings && Object.keys(ocReadings).length) return; // already migrated
+  if (!readingLog || !readingLog.length) return;
+  if (ocReadings && Object.keys(ocReadings).length) return;
 
   const migrated = {};
   for (const entry of readingLog) {
-    // Use URL as key; last-write-wins for duplicates
     const key = entry.url || `unknown-${entry.timestamp}`;
     migrated[key] = {
       title: entry.title || '',
@@ -67,11 +91,31 @@ async function migrateReadingLog() {
       estPages: 0,
       createdAt: entry.timestamp || new Date().toISOString(),
       updatedAt: entry.timestamp || new Date().toISOString(),
-      dirty: false // already sent
+      syncedAt: entry.timestamp || new Date().toISOString() // already sent
     };
   }
   await chrome.storage.local.set({ ocReadings: migrated });
   await chrome.storage.local.remove('readingLog');
+}
+
+// ── Migration: dirty boolean → syncedAt timestamp ───────────────────
+async function migrateDirtyToSyncedAt() {
+  const readings = await getReadings();
+  let changed = false;
+  for (const reading of Object.values(readings)) {
+    if ('dirty' in reading) {
+      if (reading.dirty) {
+        reading.syncedAt = null;
+      } else {
+        reading.syncedAt = reading.updatedAt;
+      }
+      delete reading.dirty;
+      changed = true;
+    }
+  }
+  if (changed) await saveReadings(readings);
+  // Clean up legacy outbox
+  await chrome.storage.local.remove('ocOutbox');
 }
 
 // ── Message router ──────────────────────────────────────────────────
@@ -94,16 +138,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     getTodayPages().then(result => sendResponse(result));
     return true;
   }
-  if (msg.type === 'oc-enqueue') {
-    enqueueMessage(msg.text, msg.highlightId).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-  if (msg.type === 'oc-dequeue-highlight') {
-    dequeueByHighlight(msg.highlightId).then(() => sendResponse({ ok: true }));
-    return true;
-  }
   if (msg.type === 'oc-flush') {
-    flushOutbox().then(result => sendResponse(result));
+    syncReadings().then(result => sendResponse(result));
     return true;
   }
   if (msg.type === 'oc-reset-alarm') {
@@ -127,7 +163,7 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
     estPages: estPages ?? existing?.estPages ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    dirty: true
+    syncedAt: existing?.syncedAt ?? null
   };
 
   await saveReadings(readings);
@@ -138,25 +174,18 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
 // ── Handle highlight create/update/delete ───────────────────────────
 async function handleHighlightChanged({ pageKey, action, text, highlightId }) {
   const readings = await getReadings();
-  if (readings[pageKey]) {
-    // Reading exists — mark it dirty so highlights get bundled on flush
-    await markReadingDirty(pageKey);
-  } else if (action === 'create' || action === 'update') {
-    // No reading — fall back to standalone outbox entry
-    const msg = action === 'create'
-      ? `highlight: "${(text || '').slice(0, 200)}"\nsource: ${pageKey}`
-      : `annotation update on: "${(text || '').slice(0, 100)}"\nsource: ${pageKey}`;
-    await enqueueMessage(msg, highlightId);
-  } else if (action === 'delete') {
-    // No reading — dequeue the standalone entry
-    await dequeueByHighlight(highlightId);
+  if (!readings[pageKey] && (action === 'create' || action === 'update')) {
+    // Auto-create minimal reading
+    await upsertReading({ pageKey, title: pageKey, url: pageKey });
   }
+  // Mark reading as needing sync
+  await touchReading(pageKey);
 }
 
 // ── Today's page count ──────────────────────────────────────────────
 async function getTodayPages() {
   const readings = await getReadings();
-  const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const todayStr = new Date().toISOString().slice(0, 10);
   let pages = 0;
   let count = 0;
   for (const r of Object.values(readings)) {
@@ -168,122 +197,211 @@ async function getTodayPages() {
   return { pages, count };
 }
 
-// ── Alarm listener — auto-flush + daily summary ─────────────────────
+// ── Alarm listener — auto-sync + daily summary ──────────────────────
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name === ALARM_NAME) flushOutbox();
+  if (alarm.name === ALARM_NAME) syncReadings();
   if (alarm.name === DAILY_ALARM) sendDailySummary();
 });
 
-// ── Outbox: enqueue a standalone message for later sending ──────────
-async function enqueueMessage(text, highlightId) {
-  const { ocOutbox = [] } = await chrome.storage.local.get('ocOutbox');
-  const entry = { id: Date.now().toString(), text, createdAt: new Date().toISOString() };
-  if (highlightId) entry.highlightId = highlightId;
-  ocOutbox.push(entry);
-  await chrome.storage.local.set({ ocOutbox });
-  await updateBadge();
+// ── GitHub API helpers ──────────────────────────────────────────────
+
+// GET the file to retrieve its SHA (needed for updates)
+// Returns { sha, content } or null if 404
+async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath) {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${ghPath}`,
+      { headers: { Authorization: `Bearer ${ghToken}`, Accept: 'application/vnd.github.v3+json' } }
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`GitHub GET ${res.status}`);
+    const data = await res.json();
+    return { sha: data.sha };
+  } catch (e) {
+    console.error('githubGetFile:', e);
+    return null;
+  }
 }
 
-// Remove all outbox entries tied to a deleted highlight
-async function dequeueByHighlight(highlightId) {
-  const { ocOutbox = [] } = await chrome.storage.local.get('ocOutbox');
-  const filtered = ocOutbox.filter(item => item.highlightId !== highlightId);
-  await chrome.storage.local.set({ ocOutbox: filtered });
-  await updateBadge();
+// PUT the file (create if no SHA, update if SHA provided)
+// Returns true on success, false on failure
+async function githubPushFile(ghToken, ghOwner, ghRepo, ghPath, content, sha) {
+  // Unicode-safe base64 encoding
+  const encoded = btoa(unescape(encodeURIComponent(content)));
+  const body = {
+    message: `sync reading log ${new Date().toISOString().slice(0, 10)}`,
+    content: encoded
+  };
+  if (sha) body.sha = sha;
+
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${ghPath}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${ghToken}`,
+          Accept: 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      }
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    // Cache the new SHA for next push
+    await chrome.storage.local.set({ ocGitHubSha: data.content.sha });
+    return true;
+  } catch (e) {
+    console.error('githubPushFile:', e);
+    return false;
+  }
 }
 
-// ── Two-phase flush: dirty readings first, then standalone outbox ───
-async function flushOutbox() {
-  const { botToken, chatId } = await chrome.storage.sync.get(['botToken', 'chatId']);
-  if (!botToken || !chatId) return { sent: 0, failed: 0, error: 'No Telegram credentials configured' };
+// Clear cached SHA when GitHub credentials change
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  const ghKeys = ['ghToken', 'ghOwner', 'ghRepo', 'ghPath'];
+  if (ghKeys.some(k => k in changes)) {
+    chrome.storage.local.remove('ocGitHubSha');
+  }
+});
 
-  let sent = 0;
-  let failed = 0;
+// ── Telegram diff message builder ───────────────────────────────────
+function buildDiffMessage(changedEntries) {
+  const lines = [];
+  for (const { reading, highlightCount, isNew } of changedEntries) {
+    const icon = isNew ? '\uD83D\uDCDA' : '\u270F\uFE0F'; // 📚 or ✏️
+    const verb = isNew ? 'New' : 'Updated';
+    let line = `${icon} ${verb}: "${reading.title}"`;
+    if (reading.author) line += ` by ${reading.author}`;
+    const meta = [];
+    if (reading.estPages) meta.push(`${reading.estPages} pages`);
+    if (reading.tags?.length) meta.push(reading.tags[0]);
+    if (meta.length) line += ` (${meta.join(', ')})`;
+    if (highlightCount > 0) line += `\n   ${highlightCount} highlight${highlightCount !== 1 ? 's' : ''}`;
+    lines.push(line);
+  }
+  return lines.join('\n\n');
+}
 
-  // Phase 1: Flush dirty readings as bundled messages
+// ── syncReadings() — replaces flushOutbox() ─────────────────────────
+async function syncReadings() {
+  const { botToken, chatId, ghToken, ghOwner, ghRepo, ghPath } =
+    await chrome.storage.sync.get(['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath']);
+
+  const hasGitHub = ghToken && ghOwner && ghRepo;
+  const hasTelegram = botToken && chatId;
+
+  if (!hasGitHub && !hasTelegram) {
+    return { synced: 0, failed: 0, error: 'No sync channels configured' };
+  }
+
   const readings = await getReadings();
-  for (const [pageKey, reading] of Object.entries(readings)) {
-    if (!reading.dirty) continue;
+  const allKeys = Object.keys(readings);
 
-    // Build bundled message: reading metadata + highlights
-    let msg = `📚 ${reading.title}`;
-    if (reading.author) msg += ` by ${reading.author}`;
-    if (reading.tags?.length) msg += `\ntags: ${reading.tags.join(', ')}`;
-    if (reading.estPages) msg += `\npages: ~${reading.estPages}`;
-    if (reading.url) msg += `\nurl: ${reading.url}`;
-    if (reading.notes) msg += `\nnotes: ${reading.notes}`;
+  // Identify readings that need sync
+  const changedKeys = allKeys.filter(k => needsSync(readings[k]));
+  if (changedKeys.length === 0) {
+    return { synced: 0, failed: 0 };
+  }
 
-    // Pull highlights from per-page storage
-    const hlResult = await chrome.storage.local.get([pageKey]);
-    const highlights = hlResult[pageKey] || [];
-    if (highlights.length) {
-      msg += '\n\n--- highlights ---';
-      for (const h of highlights) {
-        msg += `\n• "${h.text.slice(0, 200)}"`;
-        if (h.comment) msg += ` — ${h.comment}`;
-      }
-    }
-
-    const ok = await telegramSend(botToken, chatId, msg);
-    if (ok) {
-      reading.dirty = false;
-      reading.updatedAt = new Date().toISOString();
-      sent++;
-    } else {
-      failed++;
+  // Batch-fetch all highlights from per-page storage
+  const allHighlights = {};
+  if (allKeys.length > 0) {
+    const hlData = await chrome.storage.local.get(allKeys);
+    for (const k of allKeys) {
+      allHighlights[k] = hlData[k] || [];
     }
   }
-  await saveReadings(readings);
 
-  // Phase 2: Flush standalone outbox items (context menu highlights, etc.)
-  const { ocOutbox = [] } = await chrome.storage.local.get('ocOutbox');
-  if (ocOutbox.length) {
-    const MAX_LEN = 4096;
-    let batch = '';
-    const batchGroups = [];
-    let currentItems = [];
+  let githubOk = true;
+  let telegramOk = true;
 
-    for (const item of ocOutbox) {
-      const entry = item.text;
-      if (batch && (batch.length + 2 + entry.length) > MAX_LEN) {
-        batchGroups.push({ text: batch, items: currentItems });
-        batch = entry;
-        currentItems = [item];
-      } else {
-        batch = batch ? batch + '\n\n' + entry : entry;
-        currentItems.push(item);
+  // Phase 1: GitHub — push full export (all readings, not just changed)
+  if (hasGitHub) {
+    const path = ghPath || 'reading-log.json';
+    const exportPayload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      readings: {}
+    };
+
+    for (const [key, reading] of Object.entries(readings)) {
+      exportPayload.readings[key] = {
+        title: reading.title,
+        author: reading.author,
+        url: reading.url,
+        tags: reading.tags,
+        notes: reading.notes,
+        estPages: reading.estPages,
+        createdAt: reading.createdAt,
+        updatedAt: reading.updatedAt,
+        highlights: allHighlights[key] || []
+      };
+    }
+
+    const content = JSON.stringify(exportPayload, null, 2);
+
+    // Try cached SHA first, fall back to fetching
+    const { ocGitHubSha } = await chrome.storage.local.get('ocGitHubSha');
+    let sha = ocGitHubSha || null;
+    if (!sha) {
+      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, path);
+      sha = existing?.sha || null;
+    }
+
+    githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, sha);
+
+    // SHA conflict retry: re-fetch fresh SHA and try once more
+    if (!githubOk && sha) {
+      const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, path);
+      if (fresh?.sha) {
+        githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, fresh.sha);
       }
     }
-    if (batch) batchGroups.push({ text: batch, items: currentItems });
+  }
 
-    const remaining = [];
-    for (const group of batchGroups) {
-      const ok = await telegramSend(botToken, chatId, group.text);
-      if (ok) {
-        sent += group.items.length;
-      } else {
-        failed += group.items.length;
-        remaining.push(...group.items);
-      }
+  // Phase 2: Telegram — send diff message for changed readings only
+  if (hasTelegram) {
+    const changedEntries = changedKeys.map(k => ({
+      reading: readings[k],
+      highlightCount: (allHighlights[k] || []).length,
+      isNew: !readings[k].syncedAt
+    }));
+
+    const diffMsg = buildDiffMessage(changedEntries);
+    if (diffMsg) {
+      telegramOk = await telegramSend(botToken, chatId, diffMsg);
     }
-    await chrome.storage.local.set({ ocOutbox: remaining });
+  }
+
+  // Phase 3: Stamp syncedAt only if all configured channels succeeded
+  const allOk = (!hasGitHub || githubOk) && (!hasTelegram || telegramOk);
+  if (allOk) {
+    const now = new Date().toISOString();
+    for (const k of changedKeys) {
+      readings[k].syncedAt = now;
+    }
+    await saveReadings(readings);
   }
 
   await updateBadge();
-  return { sent, failed };
+
+  const synced = allOk ? changedKeys.length : 0;
+  const failed = allOk ? 0 : changedKeys.length;
+  return { synced, failed, githubOk, telegramOk };
 }
 
-// ── Badge: show pending count (dirty readings + outbox items) ───────
+// ── Badge: show pending count (unsynced readings) ───────────────────
 async function updateBadge() {
   const readings = await getReadings();
-  const dirtyCount = Object.values(readings).filter(r => r.dirty).length;
-  const { ocOutbox = [] } = await chrome.storage.local.get('ocOutbox');
-  const count = dirtyCount + ocOutbox.length;
+  const count = Object.values(readings).filter(r => needsSync(r)).length;
   chrome.action.setBadgeText({ text: count > 0 ? String(count) : '' });
   chrome.action.setBadgeBackgroundColor({ color: '#e8a87c' });
 }
 
-// ── Alarm: configure periodic auto-flush ────────────────────────────
+// ── Alarm: configure periodic auto-sync ─────────────────────────────
 async function setupFlushAlarm(intervalOverride) {
   await chrome.alarms.clear(ALARM_NAME);
   let minutes = intervalOverride;
@@ -300,7 +418,6 @@ async function setupDailySummaryAlarm() {
   const now = new Date();
   const target = new Date(now);
   target.setHours(23, 0, 0, 0);
-  // If it's already past 23:00 today, schedule for tomorrow
   if (now >= target) target.setDate(target.getDate() + 1);
   const delayMs = target.getTime() - now.getTime();
   chrome.alarms.create(DAILY_ALARM, {
@@ -313,8 +430,8 @@ async function sendDailySummary() {
   const { botToken, chatId } = await chrome.storage.sync.get(['botToken', 'chatId']);
   if (!botToken || !chatId) return;
   const { pages, count } = await getTodayPages();
-  if (count === 0) return; // nothing read today
-  const msg = `📊 Daily reading: ${pages}/${PAGES_PER_DAY_GOAL} pages across ${count} reading${count !== 1 ? 's' : ''}`;
+  if (count === 0) return;
+  const msg = `\uD83D\uDCCA Daily reading: ${pages}/${PAGES_PER_DAY_GOAL} pages across ${count} reading${count !== 1 ? 's' : ''}`;
   await telegramSend(botToken, chatId, msg);
 }
 

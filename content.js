@@ -16,10 +16,20 @@
 
   // ── Storage helpers ──────────────────────────────────────────────
   function getHighlights(cb) {
-    chrome.storage.local.get([pageKey()], res => cb(res[pageKey()] || []));
+    try {
+      chrome.storage.local.get([pageKey()], res => cb(res[pageKey()] || []));
+    } catch (e) {
+      // Extension context invalidated (extension reloaded while page still open)
+      cb([]);
+    }
   }
   function saveHighlights(arr, cb) {
-    chrome.storage.local.set({ [pageKey()]: arr }, cb);
+    try {
+      chrome.storage.local.set({ [pageKey()]: arr }, cb);
+    } catch (e) {
+      // Extension context invalidated
+      if (cb) cb();
+    }
   }
 
   // ── Re-apply stored highlights on load ───────────────────────────
@@ -318,9 +328,18 @@
   }
 
   // ── Save / delete highlights ───────────────────────────────────
+  let lastSavedText = '';
+  let lastSavedTime = 0;
+
   function saveHighlight(text, range, comment, onDone) {
+    // Dedup guard: reject identical text saved within 2 seconds
+    const now = Date.now();
+    if (text === lastSavedText && now - lastSavedTime < 2000) return;
+    lastSavedText = text;
+    lastSavedTime = now;
+
     const h = {
-      id: Date.now().toString(),
+      id: now.toString(),
       text,
       comment,
       timestamp: new Date().toISOString()
@@ -350,13 +369,17 @@
   // ── Notify background of highlight changes ─────────────────────
   // action: 'create' | 'update' | 'delete'
   function notifyHighlightChanged(action, text, highlightId) {
-    chrome.runtime.sendMessage({
-      type: 'oc-highlight-changed',
-      pageKey: pageKey(),
-      action,
-      text,
-      highlightId
-    });
+    try {
+      chrome.runtime.sendMessage({
+        type: 'oc-highlight-changed',
+        pageKey: pageKey(),
+        action,
+        text,
+        highlightId
+      });
+    } catch (e) {
+      // Extension context invalidated
+    }
   }
 
   // ── Word count helper ─────────────────────────────────────────────
@@ -390,7 +413,9 @@
 
       if (highlightMode) {
         removeAnnotationPopup();
-        saveHighlight(text, range.cloneRange(), '', (h, mark) => {
+        const clonedRange = range.cloneRange();
+        sel.removeAllRanges(); // Clear immediately to prevent duplicate mouseup saves
+        saveHighlight(text, clonedRange, '', (h, mark) => {
           if (mark) showAnnotationPopup(mark, h);
         });
       } else {

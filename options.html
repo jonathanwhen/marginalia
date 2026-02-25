@@ -30,10 +30,36 @@
     <div class="hint">Your numeric Telegram user ID</div>
   </div>
 
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">GitHub Sync</h2>
+
   <div class="field">
-    <label>Auto-send interval (minutes)</label>
+    <label>GitHub Personal Access Token</label>
+    <input type="password" id="ghToken" placeholder="github_pat_..." />
+    <div class="hint">Fine-grained PAT with Contents read/write scope</div>
+  </div>
+
+  <div class="field">
+    <label>Repository Owner</label>
+    <input type="text" id="ghOwner" placeholder="your-username" />
+  </div>
+
+  <div class="field">
+    <label>Repository Name</label>
+    <input type="text" id="ghRepo" placeholder="reading-log" />
+  </div>
+
+  <div class="field">
+    <label>File Path</label>
+    <input type="text" id="ghPath" placeholder="reading-log.json" />
+    <div class="hint">Path within the repo (default: reading-log.json)</div>
+  </div>
+
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Auto-Sync</h2>
+
+  <div class="field">
+    <label>Auto-sync interval (minutes)</label>
     <input type="number" id="flushInterval" min="1" max="1440" placeholder="60" />
-    <div class="hint">How often queued messages are sent automatically (default: 60)</div>
+    <div class="hint">How often readings are synced automatically (default: 60)</div>
   </div>
 
   <button id="save">Save</button>
