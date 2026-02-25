@@ -75,7 +75,7 @@
   <div class="header">
     <span class="logo">🦞</span>
     <span class="title">OpenClaw</span>
-    <span class="pg-count" id="today-count">Today: 0 pg</span>
+    <span class="pg-count" id="today-count"></span>
   </div>
 
   <div class="tabs">
@@ -90,15 +90,9 @@
       <label>Title</label>
       <input type="text" id="log-title" placeholder="Auto-filled from page" />
     </div>
-    <div class="row">
-      <div class="field">
-        <label>Author</label>
-        <input type="text" id="log-author" placeholder="—" />
-      </div>
-      <div class="field">
-        <label>Pages read</label>
-        <input type="number" id="log-pages" placeholder="0" min="1" />
-      </div>
+    <div class="field">
+      <label>Author</label>
+      <input type="text" id="log-author" placeholder="—" />
     </div>
     <div class="field">
       <label>Source URL</label>
@@ -124,6 +118,7 @@
 
   <!-- Highlights for this page -->
   <div class="panel" id="panel-highlights">
+    <button class="send-btn" id="hl-mode-btn" style="margin-bottom:10px;">Start Highlighting</button>
     <div class="hl-list" id="hl-list">
       <div class="hl-empty">No highlights on this page yet.<br>Select text to highlight.</div>
     </div>

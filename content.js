@@ -1,9 +1,16 @@
 (() => {
+  // Guard against double-injection (manifest auto-inject + programmatic inject)
+  if (window.__ocContentScriptLoaded) return;
+  window.__ocContentScriptLoaded = true;
+
   let toolbar = null;
   let commentBox = null;
   let noteBubble = null;
+  let annotationPopup = null;
   let pendingRange = null;
   let pendingText = null;
+  let highlightMode = false;
+  let modeBanner = null;
 
   const pageKey = () => location.origin + location.pathname;
 
@@ -36,6 +43,7 @@
     }
   }
 
+  // Returns the created <mark> element (or null on failure)
   function wrapRange(range, h) {
     try {
       const mark = document.createElement('mark');
@@ -45,12 +53,52 @@
       range.surroundContents(mark);
       mark.addEventListener('click', e => {
         e.stopPropagation();
-        showNoteBubble(mark, h);
+        if (!highlightMode) showNoteBubble(mark, h);
       });
-    } catch (e) {}
+      return mark;
+    } catch (e) {
+      return null;
+    }
   }
 
-  // ── Toolbar ──────────────────────────────────────────────────────
+  // ── Highlight mode ─────────────────────────────────────────────
+  function enterHighlightMode() {
+    if (highlightMode) return;
+    highlightMode = true;
+    removeToolbar();
+    removeCommentBox();
+    removeNoteBubble();
+    removeAnnotationPopup();
+
+    modeBanner = document.createElement('div');
+    modeBanner.id = 'oc-mode-banner';
+    modeBanner.innerHTML = `
+      <span class="oc-banner-icon">🦞</span>
+      <span class="oc-banner-text">Highlight mode — select text to highlight</span>
+      <button id="oc-banner-exit">✕ Done</button>
+    `;
+    document.body.appendChild(modeBanner);
+
+    modeBanner.querySelector('#oc-banner-exit').addEventListener('click', exitHighlightMode);
+  }
+
+  function exitHighlightMode() {
+    highlightMode = false;
+    if (modeBanner) { modeBanner.remove(); modeBanner = null; }
+    removeAnnotationPopup();
+    window.getSelection()?.removeAllRanges();
+  }
+
+  // Listen for toggle message from popup
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'oc-toggle-highlight-mode') {
+      if (highlightMode) exitHighlightMode();
+      else enterHighlightMode();
+      sendResponse({ ok: true });
+    }
+  });
+
+  // ── Remove helpers ─────────────────────────────────────────────
   function removeToolbar() {
     if (toolbar) { toolbar.remove(); toolbar = null; }
   }
@@ -60,7 +108,60 @@
   function removeNoteBubble() {
     if (noteBubble) { noteBubble.remove(); noteBubble = null; }
   }
+  function removeAnnotationPopup() {
+    if (annotationPopup) { annotationPopup.remove(); annotationPopup = null; }
+  }
 
+  // ── Annotation popup (appears after highlight-mode auto-highlight) ──
+  function showAnnotationPopup(mark, h) {
+    removeAnnotationPopup();
+    annotationPopup = document.createElement('div');
+    annotationPopup.id = 'oc-annotation-popup';
+    annotationPopup.innerHTML = `
+      <input type="text" placeholder="Add a note... (Enter to save, Esc to skip)" class="oc-ann-input" />
+    `;
+    document.body.appendChild(annotationPopup);
+
+    const rect = mark.getBoundingClientRect();
+    const vw = window.innerWidth;
+    let px = rect.left + window.scrollX;
+    px = Math.max(8, Math.min(px, vw - 270));
+    annotationPopup.style.left = px + 'px';
+    annotationPopup.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+
+    const input = annotationPopup.querySelector('.oc-ann-input');
+    input.focus();
+
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        const comment = input.value.trim();
+        if (comment) updateHighlightComment(h.id, comment, mark, h);
+        removeAnnotationPopup();
+      }
+      if (e.key === 'Escape') removeAnnotationPopup();
+    });
+
+    // Prevent mousedown on the popup from dismissing it or starting selection
+    annotationPopup.addEventListener('mousedown', e => e.stopPropagation());
+  }
+
+  // ── Update a highlight's comment in storage + DOM ──────────────
+  function updateHighlightComment(id, comment, mark, h) {
+    h.comment = comment;
+    mark.className = 'oc-highlight' + (comment ? ' oc-highlight-comment' : '');
+    mark.title = comment;
+    getHighlights(highlights => {
+      const existing = highlights.find(hl => hl.id === id);
+      if (existing) existing.comment = comment;
+      saveHighlights(highlights);
+    });
+    sendToTelegram(
+      `annotation: "${comment}"\non: "${h.text.slice(0, 100)}"\nsource: ${location.href}`
+    );
+  }
+
+  // ── Toolbar (used outside highlight mode) ──────────────────────
   function showToolbar(x, y, text, range) {
     removeToolbar();
     pendingText = text;
@@ -76,8 +177,7 @@
     `;
     document.body.appendChild(toolbar);
 
-    // Position near selection
-    const vw = window.innerWidth, vh = window.innerHeight;
+    const vw = window.innerWidth;
     let tx = x - toolbar.offsetWidth / 2;
     let ty = y - 48;
     tx = Math.max(8, Math.min(tx, vw - toolbar.offsetWidth - 8));
@@ -131,14 +231,26 @@
     });
   }
 
+  // ── Note bubble (click existing highlight to view/edit/delete) ─
   function showNoteBubble(anchor, h) {
     removeNoteBubble();
+    const hasComment = !!h.comment;
     noteBubble = document.createElement('div');
     noteBubble.id = 'oc-note-bubble';
     noteBubble.innerHTML = `
       <div class="oc-nb-quote">${h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text}</div>
-      ${h.comment ? `<div class="oc-nb-comment">${h.comment}</div>` : ''}
-      <span class="oc-nb-delete">✕ Remove highlight</span>
+      ${hasComment ? `<div class="oc-nb-comment">${h.comment}</div>` : ''}
+      <div class="oc-nb-edit-section" style="display:none;">
+        <textarea class="oc-nb-edit-input" placeholder="Add a note...">${h.comment || ''}</textarea>
+        <div class="oc-nb-edit-actions">
+          <button class="oc-nb-edit-save">Save</button>
+          <button class="oc-nb-edit-cancel">Cancel</button>
+        </div>
+      </div>
+      <div class="oc-nb-actions">
+        <span class="oc-nb-edit-btn">${hasComment ? '✎ Edit note' : '✎ Add note'}</span>
+        <span class="oc-nb-delete">✕ Remove</span>
+      </div>
     `;
     document.body.appendChild(noteBubble);
 
@@ -150,13 +262,51 @@
     noteBubble.style.left = nx + 'px';
     noteBubble.style.top = ny + 'px';
 
+    // Delete handler
     noteBubble.querySelector('.oc-nb-delete').addEventListener('click', () => {
       deleteHighlight(h.id, anchor);
       removeNoteBubble();
     });
+
+    // Edit/add note handler
+    const editSection = noteBubble.querySelector('.oc-nb-edit-section');
+    const editInput = noteBubble.querySelector('.oc-nb-edit-input');
+    const commentDiv = noteBubble.querySelector('.oc-nb-comment');
+    const actionsDiv = noteBubble.querySelector('.oc-nb-actions');
+
+    noteBubble.querySelector('.oc-nb-edit-btn').addEventListener('click', () => {
+      editSection.style.display = 'block';
+      actionsDiv.style.display = 'none';
+      if (commentDiv) commentDiv.style.display = 'none';
+      editInput.focus();
+      editInput.setSelectionRange(editInput.value.length, editInput.value.length);
+    });
+
+    noteBubble.querySelector('.oc-nb-edit-save').addEventListener('click', () => {
+      const newComment = editInput.value.trim();
+      updateHighlightComment(h.id, newComment, anchor, h);
+      removeNoteBubble();
+    });
+
+    noteBubble.querySelector('.oc-nb-edit-cancel').addEventListener('click', () => {
+      editSection.style.display = 'none';
+      actionsDiv.style.display = '';
+      if (commentDiv) commentDiv.style.display = '';
+    });
+
+    editInput.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        noteBubble.querySelector('.oc-nb-edit-save').click();
+      }
+      if (e.key === 'Escape') {
+        noteBubble.querySelector('.oc-nb-edit-cancel').click();
+      }
+    });
   }
 
-  function saveHighlight(text, range, comment) {
+  // ── Save / delete highlights ───────────────────────────────────
+  function saveHighlight(text, range, comment, onDone) {
     const h = {
       id: Date.now().toString(),
       text,
@@ -166,22 +316,21 @@
     getHighlights(highlights => {
       highlights.push(h);
       saveHighlights(highlights, () => {
-        wrapRange(range, h);
+        const mark = wrapRange(range, h);
         window.getSelection()?.removeAllRanges();
-        // Notify via Telegram
         sendToTelegram(
           `highlight: "${text.slice(0, 200)}"${comment ? `\ncomment: ${comment}` : ''}\nsource: ${location.href}`
         );
+        if (onDone) onDone(h, mark);
       });
     });
   }
 
   function deleteHighlight(id, markEl) {
-    // Unwrap the mark element
     const parent = markEl.parentNode;
     while (markEl.firstChild) parent.insertBefore(markEl.firstChild, markEl);
     parent.removeChild(markEl);
-    // Remove from storage
+    parent.normalize();
     getHighlights(highlights => {
       saveHighlights(highlights.filter(h => h.id !== id));
     });
@@ -203,20 +352,36 @@
   document.addEventListener('mouseup', e => {
     if (toolbar && toolbar.contains(e.target)) return;
     if (commentBox && commentBox.contains(e.target)) return;
+    if (modeBanner && modeBanner.contains(e.target)) return;
+    if (noteBubble && noteBubble.contains(e.target)) return;
+    if (annotationPopup && annotationPopup.contains(e.target)) return;
+
     removeNoteBubble();
 
     setTimeout(() => {
       const sel = window.getSelection();
       const text = sel?.toString().trim();
-      if (!text || text.length < 5) { removeToolbar(); return; }
+      if (!text || text.length < 2) {
+        if (!highlightMode) removeToolbar();
+        return;
+      }
+
       const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      showToolbar(
-        rect.left + rect.width / 2 + window.scrollX,
-        rect.top + window.scrollY,
-        text,
-        range
-      );
+
+      if (highlightMode) {
+        removeAnnotationPopup();
+        saveHighlight(text, range.cloneRange(), '', (h, mark) => {
+          if (mark) showAnnotationPopup(mark, h);
+        });
+      } else {
+        const rect = range.getBoundingClientRect();
+        showToolbar(
+          rect.left + rect.width / 2 + window.scrollX,
+          rect.top + window.scrollY,
+          text,
+          range
+        );
+      }
     }, 10);
   });
 
@@ -224,10 +389,17 @@
     if (toolbar && !toolbar.contains(e.target)) removeToolbar();
     if (commentBox && !commentBox.contains(e.target)) removeCommentBox();
     if (noteBubble && !noteBubble.contains(e.target)) removeNoteBubble();
+    if (annotationPopup && !annotationPopup.contains(e.target)) removeAnnotationPopup();
   });
 
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { removeToolbar(); removeCommentBox(); removeNoteBubble(); }
+    if (e.key === 'Escape') {
+      if (highlightMode) exitHighlightMode();
+      removeToolbar();
+      removeCommentBox();
+      removeNoteBubble();
+      removeAnnotationPopup();
+    }
   });
 
   // Apply on load

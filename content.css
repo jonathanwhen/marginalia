@@ -14,7 +14,7 @@
 }
 
 #oc-toolbar {
-  position: fixed;
+  position: absolute;
   z-index: 2147483647;
   background: #111;
   border: 1px solid #333;
@@ -43,7 +43,7 @@
 #oc-toolbar .oc-divider { width: 1px; height: 16px; background: #333; }
 
 #oc-comment-box {
-  position: fixed;
+  position: absolute;
   z-index: 2147483647;
   background: #111;
   border: 1px solid #333;
@@ -81,7 +81,7 @@
 #oc-comment-box .oc-cancel { background: #222; color: #888; }
 
 #oc-note-bubble {
-  position: fixed;
+  position: absolute;
   z-index: 2147483647;
   background: #111;
   border: 1px solid #2a2a2a;
@@ -103,13 +103,110 @@
   padding-left: 8px;
   font-size: 11px;
 }
-#oc-note-bubble .oc-nb-comment { color: #aaa; font-size: 12px; }
-#oc-note-bubble .oc-nb-delete {
-  display: block;
+#oc-note-bubble .oc-nb-comment { color: #aaa; font-size: 12px; margin-bottom: 4px; }
+#oc-note-bubble .oc-nb-actions {
+  display: flex;
+  justify-content: space-between;
   margin-top: 8px;
+  border-top: 1px solid #222;
+  padding-top: 8px;
+}
+#oc-note-bubble .oc-nb-edit-btn,
+#oc-note-bubble .oc-nb-delete {
   color: #555;
   cursor: pointer;
   font-size: 11px;
-  text-align: right;
 }
+#oc-note-bubble .oc-nb-edit-btn:hover { color: #e8a87c; }
 #oc-note-bubble .oc-nb-delete:hover { color: #eb5757; }
+#oc-note-bubble .oc-nb-edit-section { margin-top: 8px; }
+#oc-note-bubble .oc-nb-edit-input {
+  width: 100%;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 5px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+  resize: none;
+  height: 60px;
+  font-family: -apple-system, sans-serif;
+  box-sizing: border-box;
+}
+#oc-note-bubble .oc-nb-edit-input:focus { border-color: #e8a87c; }
+#oc-note-bubble .oc-nb-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+#oc-note-bubble .oc-nb-edit-actions button {
+  flex: 1;
+  padding: 5px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: -apple-system, sans-serif;
+}
+#oc-note-bubble .oc-nb-edit-save { background: #e8a87c; color: #0a0a0a; }
+#oc-note-bubble .oc-nb-edit-cancel { background: #222; color: #888; }
+
+/* Annotation popup (highlight mode inline note input) */
+#oc-annotation-popup {
+  position: absolute;
+  z-index: 2147483647;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  font-family: -apple-system, sans-serif;
+}
+#oc-annotation-popup .oc-ann-input {
+  width: 250px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+  font-family: -apple-system, sans-serif;
+  box-sizing: border-box;
+}
+#oc-annotation-popup .oc-ann-input:focus { border-color: #e8a87c; }
+
+/* Highlight mode banner */
+#oc-mode-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2147483647;
+  background: #111;
+  border-bottom: 2px solid #e8a87c;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  color: #ccc;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+#oc-mode-banner .oc-banner-icon { font-size: 16px; }
+#oc-mode-banner .oc-banner-text { flex: 1; }
+#oc-mode-banner #oc-banner-exit {
+  background: #222;
+  border: 1px solid #333;
+  color: #aaa;
+  padding: 4px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: -apple-system, sans-serif;
+  transition: background 0.15s, color 0.15s;
+}
+#oc-mode-banner #oc-banner-exit:hover { background: #333; color: #fff; }

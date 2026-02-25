@@ -41,12 +41,23 @@ function showToast(msg, type = 'success') {
 async function sendMessage(text) {
   const { botToken, chatId } = await chrome.storage.sync.get(['botToken', 'chatId']);
   if (!botToken || !chatId) { showToast('Configure settings first', 'error'); return false; }
-  const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text })
-  });
-  return res.ok;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const desc = body.description || `HTTP ${res.status}`;
+      showToast(`Telegram: ${desc}`, 'error');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    showToast(`Network error: ${e.message}`, 'error');
+    return false;
+  }
 }
 
 // ── Auto-fill from current tab ────────────────────────────────────
@@ -74,34 +85,23 @@ async function autofill() {
   } catch (e) {}
 }
 
-// ── Today's page count ────────────────────────────────────────────
-async function loadTodayCount() {
-  const today = new Date().toISOString().slice(0, 10);
-  const { readingLog = [] } = await chrome.storage.local.get('readingLog');
-  const todayPages = readingLog
-    .filter(e => e.timestamp.startsWith(today))
-    .reduce((sum, e) => sum + (e.pages || 0), 0);
-  document.getElementById('today-count').textContent = `Today: ${todayPages} pg`;
-}
-
 // ── Log reading ───────────────────────────────────────────────────
 document.getElementById('log-send').addEventListener('click', async () => {
   const title = document.getElementById('log-title').value.trim();
-  const pages = parseInt(document.getElementById('log-pages').value);
   const author = document.getElementById('log-author').value.trim();
   const url = document.getElementById('log-url').value.trim();
   const notes = document.getElementById('log-notes').value.trim();
   const tags = getSelectedTags('tags-wrap');
 
-  if (!title || !pages) { showToast('Title and pages required', 'error'); return; }
+  if (!title) { showToast('Title required', 'error'); return; }
 
   // Save to local log
   const { readingLog = [] } = await chrome.storage.local.get('readingLog');
-  readingLog.push({ title, author, pages, url, notes, tags, timestamp: new Date().toISOString() });
+  readingLog.push({ title, author, url, notes, tags, timestamp: new Date().toISOString() });
   await chrome.storage.local.set({ readingLog });
 
   // Format Telegram message
-  let msg = `reading: ${pages} pages — ${title}`;
+  let msg = `reading: ${title}`;
   if (author) msg += ` by ${author}`;
   if (tags.length) msg += `\ntags: ${tags.join(', ')}`;
   if (url) msg += `\nurl: ${url}`;
@@ -110,13 +110,37 @@ document.getElementById('log-send').addEventListener('click', async () => {
   const ok = await sendMessage(msg);
   if (ok) {
     showToast('Logged ✓');
-    document.getElementById('log-pages').value = '';
     document.getElementById('log-notes').value = '';
     document.querySelectorAll('#tags-wrap .tag-btn').forEach(b => b.classList.remove('selected'));
-    loadTodayCount();
-  } else {
-    showToast('Failed to send', 'error');
   }
+});
+
+// ── Highlight mode toggle ─────────────────────────────────────────
+document.getElementById('hl-mode-btn').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  // Ensure content script + CSS are injected (no-op if already loaded due to guard)
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content.js']
+    });
+    await chrome.scripting.insertCSS({
+      target: { tabId: tab.id },
+      files: ['content.css']
+    });
+  } catch (e) {
+    // Can't inject on chrome:// or other restricted pages
+  }
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'oc-toggle-highlight-mode' });
+  } catch (e) {
+    // Content script still unreachable — restricted page
+  }
+
+  window.close();
 });
 
 // ── Highlights panel ──────────────────────────────────────────────
@@ -164,4 +188,3 @@ document.getElementById('note-input').addEventListener('keydown', e => {
 
 // ── Init ──────────────────────────────────────────────────────────
 autofill();
-loadTodayCount();
