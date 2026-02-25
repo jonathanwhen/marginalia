@@ -49,6 +49,8 @@
     }
     .send-btn:hover { opacity: 0.85; }
 
+    .auto-save-hint { color: #444; font-size: 10px; text-align: center; margin-top: 6px; }
+
     .toast { display: none; padding: 7px 14px; font-size: 11px; text-align: center; }
     .toast.success { color: #6fcf97; }
     .toast.error { color: #eb5757; }
@@ -142,6 +144,7 @@
       <textarea id="log-notes" rows="3" placeholder="Key takeaways..."></textarea>
     </div>
     <button class="send-btn" id="log-send">Log Reading</button>
+    <p class="auto-save-hint" id="auto-save-hint" style="display:none;">Auto-saves when you close the popup</p>
   </div>
 
   <!-- Highlights for this page -->
@@ -154,11 +157,20 @@
 
   <!-- Note for this reading -->
   <div class="panel" id="panel-note">
-    <div class="field">
-      <label>Note for this reading</label>
-      <textarea id="note-input" rows="5" placeholder="Key takeaways, thoughts, or insights for this reading..."></textarea>
+    <div id="note-sidebar-section">
+      <p style="color:#888; font-size:11px; margin-bottom:10px;">
+        Open a persistent sidebar to write notes while reading. It auto-saves and stays open when you click the page.
+      </p>
+      <button class="send-btn" id="note-open-sidebar">Open Notes Sidebar</button>
     </div>
-    <button class="send-btn" id="note-send">Save Note</button>
+    <!-- Fallback for pages where content script can't run (chrome://, etc.) -->
+    <div id="note-fallback-section" style="display:none;">
+      <div class="field">
+        <label>Note for this reading</label>
+        <textarea id="note-input" rows="5" placeholder="Key takeaways, thoughts, or insights for this reading..."></textarea>
+      </div>
+      <button class="send-btn" id="note-send">Save Note</button>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>

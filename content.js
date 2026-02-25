@@ -10,6 +10,8 @@
   let pendingText = null;
   let highlightMode = false;
   let modeBanner = null;
+  let sidebar = null;
+  let sidebarSaveTimer = null;
 
   const pageKey = () => location.origin + location.pathname;
   const isPdf = document.contentType === 'application/pdf' || location.pathname.toLowerCase().endsWith('.pdf');
@@ -151,6 +153,11 @@
 
   // Listen for messages from popup
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'oc-open-sidebar') {
+      openNotesSidebar();
+      sendResponse({ ok: true });
+      return;
+    }
     if (msg.type === 'oc-toggle-highlight-mode') {
       if (isPdf) {
         sendResponse({ ok: false, pdf: true });
@@ -405,6 +412,8 @@
         highlightId
       });
     } catch (e) {}
+    // Refresh sidebar highlights list if open
+    loadSidebarHighlights();
   }
 
   // ── Word count helper ─────────────────────────────────────────────
@@ -416,6 +425,146 @@
     return text.split(/\s+/).filter(w => w.length > 0).length;
   }
 
+  // ── Notes sidebar ─────────────────────────────────────────────────
+  function openNotesSidebar() {
+    if (sidebar) return; // already open
+
+    sidebar = document.createElement('div');
+    sidebar.id = 'oc-sidebar';
+
+    const titleText = document.title || pageKey();
+    const truncTitle = titleText.length > 40 ? titleText.slice(0, 40) + '…' : titleText;
+
+    sidebar.innerHTML = `
+      <div class="oc-sb-header">
+        <span class="oc-sb-logo">🦞</span>
+        <span class="oc-sb-title">Notes: "${truncTitle}"</span>
+        <button class="oc-sb-close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="oc-sb-body">
+        <span class="oc-sb-label">Notes</span>
+        <textarea class="oc-sb-textarea" placeholder="Key takeaways, thoughts, or insights..."></textarea>
+        <div class="oc-sb-status"></div>
+        <div class="oc-sb-divider"></div>
+        <div class="oc-sb-hl-header">Highlights (0)</div>
+        <div class="oc-sb-hl-list">
+          <div class="oc-sb-hl-empty">No highlights on this page.</div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(sidebar);
+    document.documentElement.style.marginRight = '380px';
+
+    const textarea = sidebar.querySelector('.oc-sb-textarea');
+    const statusEl = sidebar.querySelector('.oc-sb-status');
+
+    // Load existing notes from reading
+    if (isContextValid()) {
+      try {
+        chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: pageKey() }, response => {
+          if (response?.reading?.notes) {
+            textarea.value = response.reading.notes;
+          }
+        });
+      } catch (e) {}
+    }
+
+    // Load highlights list
+    loadSidebarHighlights();
+
+    // Auto-save on typing (debounced 1s)
+    textarea.addEventListener('input', () => {
+      statusEl.textContent = '';
+      statusEl.className = 'oc-sb-status';
+      clearTimeout(sidebarSaveTimer);
+      sidebarSaveTimer = setTimeout(() => saveSidebarNote(textarea, statusEl), 1000);
+    });
+
+    // Cmd/Ctrl+S for immediate save
+    textarea.addEventListener('keydown', e => {
+      if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        clearTimeout(sidebarSaveTimer);
+        saveSidebarNote(textarea, statusEl);
+      }
+      // Prevent Escape from propagating if handled by sidebar close
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeNotesSidebar();
+      }
+    });
+
+    // Close button
+    sidebar.querySelector('.oc-sb-close').addEventListener('click', closeNotesSidebar);
+
+    // Focus textarea
+    textarea.focus();
+  }
+
+  function closeNotesSidebar() {
+    if (!sidebar) return;
+    // Flush any pending save
+    if (sidebarSaveTimer) {
+      clearTimeout(sidebarSaveTimer);
+      const textarea = sidebar.querySelector('.oc-sb-textarea');
+      const statusEl = sidebar.querySelector('.oc-sb-status');
+      if (textarea && statusEl) saveSidebarNote(textarea, statusEl);
+    }
+    sidebar.remove();
+    sidebar = null;
+    document.documentElement.style.marginRight = '';
+  }
+
+  function saveSidebarNote(textarea, statusEl) {
+    const notes = textarea.value.trim();
+    if (!isContextValid()) return;
+    try {
+      chrome.runtime.sendMessage({
+        type: 'oc-upsert-reading',
+        pageKey: pageKey(),
+        title: document.title || pageKey(),
+        url: location.href,
+        notes
+      }, result => {
+        if (result?.ok) {
+          statusEl.textContent = 'Saved';
+          statusEl.className = 'oc-sb-status saved';
+          setTimeout(() => {
+            if (statusEl.textContent === 'Saved') {
+              statusEl.textContent = '';
+              statusEl.className = 'oc-sb-status';
+            }
+          }, 2000);
+        }
+      });
+    } catch (e) {}
+  }
+
+  function loadSidebarHighlights() {
+    if (!sidebar) return;
+    const headerEl = sidebar.querySelector('.oc-sb-hl-header');
+    const listEl = sidebar.querySelector('.oc-sb-hl-list');
+
+    getHighlights(highlights => {
+      if (!sidebar) return; // closed while loading
+      headerEl.textContent = `Highlights (${highlights.length})`;
+
+      if (!highlights.length) {
+        listEl.innerHTML = '<div class="oc-sb-hl-empty">No highlights on this page.</div>';
+        return;
+      }
+
+      listEl.innerHTML = highlights.map(h => `
+        <div class="oc-sb-hl-item">
+          <div class="oc-sb-hl-quote">"${h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text}"</div>
+          ${h.comment ? `<div class="oc-sb-hl-comment">— ${h.comment}</div>` : ''}
+        </div>
+      `).join('');
+    });
+  }
+
   // ── PDF: skip DOM-based highlighting (context menu captures still work via background.js)
   if (isPdf) return;
 
@@ -425,6 +574,7 @@
     if (modeBanner && modeBanner.contains(e.target)) return;
     if (noteBubble && noteBubble.contains(e.target)) return;
     if (annotationPopup && annotationPopup.contains(e.target)) return;
+    if (sidebar && sidebar.contains(e.target)) return;
 
     removeNoteBubble();
 
@@ -465,6 +615,7 @@
 
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      if (sidebar) { closeNotesSidebar(); return; }
       if (highlightMode) exitHighlightMode();
       removeToolbar();
       removeNoteBubble();

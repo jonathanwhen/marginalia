@@ -132,7 +132,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'oc-highlight-changed') {
-    handleHighlightChanged(msg, _sender.tab?.id).then(() => sendResponse({ ok: true }));
+    handleHighlightChanged(msg, _sender.tab).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (msg.type === 'oc-get-today-pages') {
@@ -184,11 +184,16 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
 }
 
 // ── Handle highlight create/update/delete ───────────────────────────
-async function handleHighlightChanged({ pageKey, action, text, highlightId }, tabId) {
+async function handleHighlightChanged({ pageKey, action, text, highlightId }, tab) {
   const readings = await getReadings();
   if (!readings[pageKey] && (action === 'create' || action === 'update')) {
-    const estPages = tabId ? await estimatePages(tabId) : 0;
-    await upsertReading({ pageKey, title: pageKey, url: pageKey, estPages });
+    const estPages = tab?.id ? await estimatePages(tab.id) : 0;
+    await upsertReading({
+      pageKey,
+      title: tab?.title || pageKey,
+      url: tab?.url || pageKey,
+      estPages
+    });
   }
   await touchReading(pageKey);
 }

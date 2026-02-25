@@ -85,6 +85,7 @@ flushBtn.addEventListener('click', async () => {
 
 // ── Page key for current tab ────────────────────────────────────────
 let currentPageKey = null;
+let autofillDone = false; // true once autofill() finishes — enables auto-save on close
 
 // ── Auto-fill from current tab or existing reading ──────────────────
 async function autofill() {
@@ -117,6 +118,7 @@ async function autofill() {
     if (reading.tags?.length) selectTags('tags-wrap', reading.tags);
     document.getElementById('note-input').value = reading.notes || '';
     document.getElementById('log-send').textContent = 'Update Reading';
+    document.getElementById('auto-save-hint').style.display = 'block';
 
     // Backfill page estimate if missing
     if (!reading.estPages) {
@@ -149,6 +151,8 @@ async function autofill() {
     const estPages = await fetchEstPages();
     if (estPages) document.getElementById('log-est-pages').value = estPages;
   }
+
+  autofillDone = true;
 }
 
 // ── Log / Update reading ────────────────────────────────────────────
@@ -177,6 +181,7 @@ document.getElementById('log-send').addEventListener('click', async () => {
     if (result?.ok) {
       showToast(result.created ? 'Reading logged' : 'Reading updated');
       document.getElementById('log-send').textContent = 'Update Reading';
+      document.getElementById('auto-save-hint').style.display = 'block';
       // Sync note tab with updated notes
       document.getElementById('note-input').value = notes;
     } else {
@@ -277,14 +282,34 @@ async function loadHighlights() {
   });
 }
 
-// ── Note (saves to reading) ──────────────────────────────────────
+// ── Notes sidebar button ─────────────────────────────────────────
+document.getElementById('note-open-sidebar').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return;
+
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content.css'] });
+    await chrome.tabs.sendMessage(tab.id, { type: 'oc-open-sidebar' });
+    window.close();
+  } catch (e) {
+    // Content script can't run on this page — show fallback inline textarea
+    showNoteFallback();
+  }
+});
+
+function showNoteFallback() {
+  document.getElementById('note-sidebar-section').style.display = 'none';
+  document.getElementById('note-fallback-section').style.display = 'block';
+}
+
+// ── Note fallback (saves to reading, for pages where sidebar can't inject) ──
 document.getElementById('note-send').addEventListener('click', async () => {
   const note = document.getElementById('note-input').value.trim();
   if (!note) { showToast('Note is empty', 'error'); return; }
   if (!currentPageKey) { showToast('No page context', 'error'); return; }
 
   try {
-    // Upsert reading with just the note (auto-creates minimal reading if none exists)
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const result = await chrome.runtime.sendMessage({
       type: 'oc-upsert-reading',
@@ -295,9 +320,7 @@ document.getElementById('note-send').addEventListener('click', async () => {
     });
     if (result?.ok) {
       showToast('Note saved');
-      // Sync log tab notes field
       document.getElementById('log-notes').value = note;
-      // If this created a new reading, update the log button
       if (result.created) {
         document.getElementById('log-send').textContent = 'Update Reading';
       }
@@ -324,6 +347,35 @@ async function updateTodayPages() {
     }
   } catch (e) {}
 }
+
+// ── Auto-save Log tab on popup close ──────────────────────────────
+// When the popup closes (click outside, tab switch, etc.), auto-save
+// the Log form so the user doesn't lose edits or need to press "Update Reading".
+function getLogFormData() {
+  return {
+    title: document.getElementById('log-title').value.trim(),
+    author: document.getElementById('log-author').value.trim(),
+    url: document.getElementById('log-url').value.trim(),
+    notes: document.getElementById('log-notes').value.trim(),
+    estPages: parseInt(document.getElementById('log-est-pages').value, 10) || 0,
+    tags: getSelectedTags('tags-wrap')
+  };
+}
+
+window.addEventListener('pagehide', () => {
+  if (!autofillDone || !currentPageKey) return;
+  const form = getLogFormData();
+  if (!form.title) return; // nothing meaningful to save
+
+  // Fire-and-forget — background receives and processes even after popup closes
+  try {
+    chrome.runtime.sendMessage({
+      type: 'oc-upsert-reading',
+      pageKey: currentPageKey,
+      ...form
+    });
+  } catch (e) {}
+});
 
 // ── Init ──────────────────────────────────────────────────────────
 autofill();
