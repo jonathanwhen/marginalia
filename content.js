@@ -15,19 +15,28 @@
   const pageKey = () => location.origin + location.pathname;
 
   // ── Storage helpers ──────────────────────────────────────────────
+  function isContextValid() {
+    try { return !!chrome.runtime?.id; } catch { return false; }
+  }
+
   function getHighlights(cb) {
+    if (!isContextValid()) { cb([]); return; }
     try {
-      chrome.storage.local.get([pageKey()], res => cb(res[pageKey()] || []));
+      chrome.storage.local.get([pageKey()], res => {
+        if (!isContextValid()) { cb([]); return; }
+        cb(res[pageKey()] || []);
+      });
     } catch (e) {
-      // Extension context invalidated (extension reloaded while page still open)
       cb([]);
     }
   }
   function saveHighlights(arr, cb) {
+    if (!isContextValid()) { if (cb) cb(); return; }
     try {
-      chrome.storage.local.set({ [pageKey()]: arr }, cb);
+      chrome.storage.local.set({ [pageKey()]: arr }, () => {
+        if (cb) cb();
+      });
     } catch (e) {
-      // Extension context invalidated
       if (cb) cb();
     }
   }
@@ -369,6 +378,7 @@
   // ── Notify background of highlight changes ─────────────────────
   // action: 'create' | 'update' | 'delete'
   function notifyHighlightChanged(action, text, highlightId) {
+    if (!isContextValid()) return;
     try {
       chrome.runtime.sendMessage({
         type: 'oc-highlight-changed',
@@ -377,9 +387,7 @@
         text,
         highlightId
       });
-    } catch (e) {
-      // Extension context invalidated
-    }
+    } catch (e) {}
   }
 
   // ── Word count helper ─────────────────────────────────────────────
