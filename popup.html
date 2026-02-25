@@ -60,14 +60,31 @@
     }
     .settings-link:hover { color: #555; }
 
+    /* Flush bar */
+    .flush-bar { padding: 6px 14px; border-bottom: 1px solid #1e1e1e; }
+    #oc-flush-btn {
+      width: 100%; background: none; color: #e8a87c; border: 1px solid #2a2a2a;
+      border-radius: 5px; padding: 6px 10px; font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    #oc-flush-btn:hover { background: #1a1410; border-color: #e8a87c; }
+    #oc-flush-btn:disabled { color: #444; border-color: #1e1e1e; cursor: default; background: none; }
+
     /* Highlights list */
     .hl-list { max-height: 200px; overflow-y: auto; }
     .hl-item {
       padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 11px;
+      display: flex; align-items: flex-start; gap: 6px;
     }
     .hl-item:last-child { border-bottom: none; }
+    .hl-item-content { flex: 1; min-width: 0; }
     .hl-quote { color: #e8a87c; font-style: italic; margin-bottom: 3px; }
     .hl-comment { color: #888; }
+    .hl-delete {
+      flex-shrink: 0; background: none; border: none; color: #555; cursor: pointer;
+      font-size: 13px; padding: 0 2px; line-height: 1; transition: color 0.15s;
+    }
+    .hl-delete:hover { color: #eb5757; }
     .hl-empty { color: #444; font-size: 11px; padding: 16px 0; text-align: center; }
   </style>
 </head>
@@ -82,6 +99,10 @@
     <button class="tab active" data-tab="log">📚 Log</button>
     <button class="tab" data-tab="highlights">✏️ Highlights</button>
     <button class="tab" data-tab="note">📝 Note</button>
+  </div>
+
+  <div class="flush-bar">
+    <button id="oc-flush-btn" disabled>Send Now</button>
   </div>
 
   <!-- Log reading -->

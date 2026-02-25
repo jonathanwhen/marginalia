@@ -30,6 +30,12 @@
     <div class="hint">Your numeric Telegram user ID</div>
   </div>
 
+  <div class="field">
+    <label>Auto-send interval (minutes)</label>
+    <input type="number" id="flushInterval" min="1" max="1440" placeholder="60" />
+    <div class="hint">How often queued messages are sent automatically (default: 60)</div>
+  </div>
+
   <button id="save">Save</button>
   <span class="saved" id="saved-msg">Saved ✓</span>
 

@@ -89,11 +89,21 @@
     window.getSelection()?.removeAllRanges();
   }
 
-  // Listen for toggle message from popup
+  // Listen for messages from popup
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'oc-toggle-highlight-mode') {
       if (highlightMode) exitHighlightMode();
       else enterHighlightMode();
+      sendResponse({ ok: true });
+    }
+    if (msg.type === 'oc-delete-highlight') {
+      const mark = document.querySelector(`mark[data-oc-id="${msg.id}"]`);
+      if (mark) {
+        const parent = mark.parentNode;
+        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+        parent.removeChild(mark);
+        parent.normalize();
+      }
       sendResponse({ ok: true });
     }
   });
@@ -156,8 +166,9 @@
       if (existing) existing.comment = comment;
       saveHighlights(highlights);
     });
-    sendToTelegram(
-      `annotation: "${comment}"\non: "${h.text.slice(0, 100)}"\nsource: ${location.href}`
+    enqueueViaBackground(
+      `annotation: "${comment}"\non: "${h.text.slice(0, 100)}"\nsource: ${location.href}`,
+      h.id
     );
   }
 
@@ -318,8 +329,9 @@
       saveHighlights(highlights, () => {
         const mark = wrapRange(range, h);
         window.getSelection()?.removeAllRanges();
-        sendToTelegram(
-          `highlight: "${text.slice(0, 200)}"${comment ? `\ncomment: ${comment}` : ''}\nsource: ${location.href}`
+        enqueueViaBackground(
+          `highlight: "${text.slice(0, 200)}"${comment ? `\ncomment: ${comment}` : ''}\nsource: ${location.href}`,
+          h.id
         );
         if (onDone) onDone(h, mark);
       });
@@ -334,18 +346,13 @@
     getHighlights(highlights => {
       saveHighlights(highlights.filter(h => h.id !== id));
     });
+    // Remove any queued outbox messages for this highlight
+    chrome.runtime.sendMessage({ type: 'oc-dequeue-highlight', highlightId: id });
   }
 
-  // ── Telegram sender ──────────────────────────────────────────────
-  async function sendToTelegram(text) {
-    chrome.storage.sync.get(['botToken', 'chatId'], ({ botToken, chatId }) => {
-      if (!botToken || !chatId) return;
-      fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text })
-      });
-    });
+  // ── Queue via background service worker ─────────────────────────
+  function enqueueViaBackground(text, highlightId) {
+    chrome.runtime.sendMessage({ type: 'oc-enqueue', text, highlightId });
   }
 
   // ── Selection listener ───────────────────────────────────────────
