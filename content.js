@@ -4,7 +4,6 @@
   window.__ocContentScriptLoaded = true;
 
   let toolbar = null;
-  let commentBox = null;
   let noteBubble = null;
   let annotationPopup = null;
   let pendingRange = null;
@@ -127,7 +126,6 @@
     if (highlightMode) return;
     highlightMode = true;
     removeToolbar();
-    removeCommentBox();
     removeNoteBubble();
     removeAnnotationPopup();
 
@@ -175,9 +173,6 @@
   // ── Remove helpers ─────────────────────────────────────────────
   function removeToolbar() {
     if (toolbar) { toolbar.remove(); toolbar = null; }
-  }
-  function removeCommentBox() {
-    if (commentBox) { commentBox.remove(); commentBox = null; }
   }
   function removeNoteBubble() {
     if (noteBubble) { noteBubble.remove(); noteBubble = null; }
@@ -265,41 +260,9 @@
     toolbar.querySelector('#oc-btn-comment').addEventListener('click', e => {
       e.stopPropagation();
       removeToolbar();
-      showCommentBox(x, y);
-    });
-  }
-
-  function showCommentBox(x, y) {
-    removeCommentBox();
-    commentBox = document.createElement('div');
-    commentBox.id = 'oc-comment-box';
-    commentBox.innerHTML = `
-      <div style="font-size:11px;color:#666;margin-bottom:6px;font-family:-apple-system,sans-serif;">Add a comment</div>
-      <textarea placeholder="Your thought on this..."></textarea>
-      <div class="oc-cb-actions">
-        <button class="oc-save">Save</button>
-        <button class="oc-cancel">Cancel</button>
-      </div>
-    `;
-    document.body.appendChild(commentBox);
-
-    const vw = window.innerWidth;
-    let cx = x - 140;
-    cx = Math.max(8, Math.min(cx, vw - 290));
-    commentBox.style.left = cx + 'px';
-    commentBox.style.top = (y + 10) + 'px';
-
-    const ta = commentBox.querySelector('textarea');
-    ta.focus();
-
-    commentBox.querySelector('.oc-save').addEventListener('click', () => {
-      saveHighlight(pendingText, pendingRange, ta.value.trim());
-      removeCommentBox();
-    });
-    commentBox.querySelector('.oc-cancel').addEventListener('click', removeCommentBox);
-    ta.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commentBox.querySelector('.oc-save').click();
-      if (e.key === 'Escape') removeCommentBox();
+      saveHighlight(pendingText, pendingRange, '', (h, mark) => {
+        if (mark) showAnnotationPopup(mark, h);
+      });
     });
   }
 
@@ -451,7 +414,6 @@
   // ── Selection listener ───────────────────────────────────────────
   document.addEventListener('mouseup', e => {
     if (toolbar && toolbar.contains(e.target)) return;
-    if (commentBox && commentBox.contains(e.target)) return;
     if (modeBanner && modeBanner.contains(e.target)) return;
     if (noteBubble && noteBubble.contains(e.target)) return;
     if (annotationPopup && annotationPopup.contains(e.target)) return;
@@ -489,7 +451,6 @@
 
   document.addEventListener('mousedown', e => {
     if (toolbar && !toolbar.contains(e.target)) removeToolbar();
-    if (commentBox && !commentBox.contains(e.target)) removeCommentBox();
     if (noteBubble && !noteBubble.contains(e.target)) removeNoteBubble();
     if (annotationPopup && !annotationPopup.contains(e.target)) removeAnnotationPopup();
   });
@@ -498,7 +459,6 @@
     if (e.key === 'Escape') {
       if (highlightMode) exitHighlightMode();
       removeToolbar();
-      removeCommentBox();
       removeNoteBubble();
       removeAnnotationPopup();
     }
