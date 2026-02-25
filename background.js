@@ -27,10 +27,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const text = info.selectionText.trim();
   const pageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
 
-  // Auto-create minimal reading if none exists
+  // Auto-create reading with page estimate if none exists
   const readings = await getReadings();
   if (!readings[pageKey]) {
-    await upsertReading({ pageKey, title: tab.title || pageKey, url: tab.url });
+    const estPages = await estimatePages(tab.id);
+    await upsertReading({ pageKey, title: tab.title || pageKey, url: tab.url, estPages });
   }
 
   // Save highlight to per-page storage
@@ -131,7 +132,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg.type === 'oc-highlight-changed') {
-    handleHighlightChanged(msg).then(() => sendResponse({ ok: true }));
+    handleHighlightChanged(msg, _sender.tab?.id).then(() => sendResponse({ ok: true }));
     return true;
   }
   if (msg.type === 'oc-get-today-pages') {
@@ -147,6 +148,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 });
+
+// ── Estimate page count from tab's word count ───────────────────────
+async function estimatePages(tabId) {
+  try {
+    // Ensure content script is injected
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    const result = await chrome.tabs.sendMessage(tabId, { type: 'oc-get-word-count' });
+    if (result?.wordCount) return Math.max(1, Math.round(result.wordCount / 275));
+  } catch (e) {}
+  return 0;
+}
 
 // ── Upsert a reading entry ──────────────────────────────────────────
 async function upsertReading({ pageKey, title, author, url, tags, notes, estPages }) {
@@ -172,13 +184,12 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
 }
 
 // ── Handle highlight create/update/delete ───────────────────────────
-async function handleHighlightChanged({ pageKey, action, text, highlightId }) {
+async function handleHighlightChanged({ pageKey, action, text, highlightId }, tabId) {
   const readings = await getReadings();
   if (!readings[pageKey] && (action === 'create' || action === 'update')) {
-    // Auto-create minimal reading
-    await upsertReading({ pageKey, title: pageKey, url: pageKey });
+    const estPages = tabId ? await estimatePages(tabId) : 0;
+    await upsertReading({ pageKey, title: pageKey, url: pageKey, estPages });
   }
-  // Mark reading as needing sync
   await touchReading(pageKey);
 }
 

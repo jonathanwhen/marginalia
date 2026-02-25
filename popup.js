@@ -97,6 +97,16 @@ async function autofill() {
   const response = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
   const reading = response?.reading;
 
+  // Estimate pages from word count (used for new readings or backfilling existing ones with 0)
+  async function fetchEstPages() {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      const wcResult = await chrome.tabs.sendMessage(tab.id, { type: 'oc-get-word-count' });
+      if (wcResult?.wordCount) return Math.max(1, Math.round(wcResult.wordCount / 275));
+    } catch (e) {}
+    return 0;
+  }
+
   if (reading) {
     // Pre-fill from existing reading
     document.getElementById('log-title').value = reading.title || '';
@@ -105,10 +115,14 @@ async function autofill() {
     document.getElementById('log-notes').value = reading.notes || '';
     document.getElementById('log-est-pages').value = reading.estPages || '';
     if (reading.tags?.length) selectTags('tags-wrap', reading.tags);
-    // Pre-fill note tab with existing notes
     document.getElementById('note-input').value = reading.notes || '';
-    // Change button text to indicate update
     document.getElementById('log-send').textContent = 'Update Reading';
+
+    // Backfill page estimate if missing
+    if (!reading.estPages) {
+      const estPages = await fetchEstPages();
+      if (estPages) document.getElementById('log-est-pages').value = estPages;
+    }
   } else {
     // Auto-fill from tab metadata
     if (tab.title) document.getElementById('log-title').value = tab.title;
@@ -132,18 +146,8 @@ async function autofill() {
     } catch (e) {}
 
     // Estimate pages from word count
-    try {
-      // Ensure content script is injected
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content.js']
-      });
-      const wcResult = await chrome.tabs.sendMessage(tab.id, { type: 'oc-get-word-count' });
-      if (wcResult?.wordCount) {
-        const estPages = Math.round(wcResult.wordCount / 275);
-        document.getElementById('log-est-pages').value = estPages > 0 ? estPages : 1;
-      }
-    } catch (e) {}
+    const estPages = await fetchEstPages();
+    if (estPages) document.getElementById('log-est-pages').value = estPages;
   }
 }
 
