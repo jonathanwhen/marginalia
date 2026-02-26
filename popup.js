@@ -367,12 +367,19 @@ window.addEventListener('pagehide', () => {
   const form = getLogFormData();
   if (!form.title) return; // nothing meaningful to save
 
-  // Fire-and-forget — background receives and processes even after popup closes
+  // Send undefined for empty fields so upsertReading's ?? operator
+  // falls through to existing values instead of overwriting with blanks.
+  // This prevents closing the popup from nuking sidebar-saved notes or tags.
   try {
     chrome.runtime.sendMessage({
       type: 'oc-upsert-reading',
       pageKey: currentPageKey,
-      ...form
+      title: form.title,
+      author: form.author || undefined,
+      url: form.url || undefined,
+      notes: form.notes || undefined,
+      estPages: form.estPages || undefined,
+      tags: form.tags.length ? form.tags : undefined
     });
   } catch (e) {}
 });

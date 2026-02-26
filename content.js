@@ -235,7 +235,7 @@
     getHighlights(highlights => {
       const existing = highlights.find(hl => hl.id === id);
       if (existing) existing.comment = comment;
-      saveHighlights(highlights);
+      saveHighlights(highlights, () => ensureReadingExists());
     });
     notifyHighlightChanged('update', h.text, h.id);
   }
@@ -379,6 +379,7 @@
     getHighlights(highlights => {
       highlights.push(h);
       saveHighlights(highlights, () => {
+        ensureReadingExists();
         notifyHighlightChanged('create', text, h.id);
         if (onDone) onDone(h, mark);
       });
@@ -397,6 +398,21 @@
       saveHighlights(highlights.filter(h => h.id !== id));
     });
     notifyHighlightChanged('delete', '', id);
+  }
+
+  // ── Ensure a reading exists for this page (belt-and-suspenders) ──
+  // Called after every highlight save so the reading is guaranteed to
+  // exist even if the oc-highlight-changed message is lost.
+  function ensureReadingExists() {
+    if (!isContextValid()) return;
+    try {
+      chrome.runtime.sendMessage({
+        type: 'oc-upsert-reading',
+        pageKey: pageKey(),
+        title: document.title || pageKey(),
+        url: location.href
+      });
+    } catch (e) {}
   }
 
   // ── Notify background of highlight changes ─────────────────────
