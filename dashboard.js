@@ -1,39 +1,53 @@
-// ── HTML escaping to prevent XSS ─────────────────────────────────
+// ── HTML escaping ────────────────────────────────────────────────
 function esc(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
 
-// ── State ────────────────────────────────────────────────────────
-let allReadings = [];       // [{pageKey, ...reading, hlCount}]
-let sortCol = 'date';       // current sort column
-let sortAsc = false;        // false = descending (most recent first)
+// ── Tag color palette ────────────────────────────────────────────
+const TAG_COLORS = {
+  'AI/ML Research':         '#e8a87c',
+  'Healthcare/Bio':         '#6fcf97',
+  'General Learning':       '#7ca8e8',
+  'Framework/Mental Model': '#b87ce8',
+  'Future Exploration':     '#e8d47c',
+  'To Revisit':             '#e87c7c'
+};
 
-// ── Column definitions ──────────────────────────────────────────
+function getTagColor(tag) {
+  return TAG_COLORS[tag] || '#888';
+}
+
+function getRowAccent(tags) {
+  if (!tags?.length) return '#252525';
+  return TAG_COLORS[tags[0]] || '#252525';
+}
+
+// ── State ────────────────────────────────────────────────────────
+let allReadings = [];
+let sortCol = 'date';
+let sortAsc = false;
+let activeTag = null;
+
 const COLUMNS = [
-  { key: 'title',   label: 'Title',     cls: 'col-title' },
-  { key: 'author',  label: 'Author',    cls: 'col-author' },
-  { key: 'tags',    label: 'Tags',      cls: 'col-tags' },
-  { key: 'pages',   label: 'Est. Pages',cls: 'col-pages' },
-  { key: 'notes',   label: 'Notes',     cls: 'col-notes' },
-  { key: 'hl',      label: 'Highlights',cls: 'col-hl' },
-  { key: 'date',    label: 'Date',      cls: 'col-date' },
+  { key: 'title',  label: 'Title',  cls: 'col-title' },
+  { key: 'author', label: 'Author', cls: 'col-author' },
+  { key: 'tags',   label: 'Tags',   cls: 'col-tags' },
+  { key: 'pages',  label: 'Pages',  cls: 'col-pages' },
+  { key: 'hl',     label: 'HL',     cls: 'col-hl' },
+  { key: 'date',   label: 'Date',   cls: 'col-date' },
 ];
 
-// ── Load readings + batch-fetch highlight counts ─────────────────
+// ── Load readings ────────────────────────────────────────────────
 async function loadReadings() {
   const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
   const pageKeys = Object.keys(ocReadings);
-
-  // Batch-fetch all page keys at once to get highlight arrays
   const hlData = pageKeys.length ? await chrome.storage.local.get(pageKeys) : {};
 
   allReadings = pageKeys.map(pageKey => {
     const r = ocReadings[pageKey];
     const highlights = hlData[pageKey];
-    // hlData[pageKey] could be the reading itself if pageKey collides with
-    // a storage key format, so only count arrays.
     const hlCount = Array.isArray(highlights) ? highlights.length : 0;
     return { pageKey, ...r, hlCount };
   });
@@ -41,20 +55,208 @@ async function loadReadings() {
   document.getElementById('total-count').textContent =
     `${allReadings.length} reading${allReadings.length !== 1 ? 's' : ''}`;
 
-  renderTable(allReadings);
+  renderStats(computeStats(allReadings));
+  renderHeatmap(allReadings);
+  renderTagFilters(allReadings);
+  renderTable(getFilteredReadings());
 }
 
-// ── Render table ─────────────────────────────────────────────────
+// ── Stats ────────────────────────────────────────────────────────
+function computeStats(readings) {
+  const totalPages = readings.reduce((sum, r) => sum + (r.estPages || 0), 0);
+  const totalReadings = readings.length;
+  const streak = computeStreak(readings);
+
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  weekAgo.setHours(0, 0, 0, 0);
+  const weekPages = readings
+    .filter(r => r.createdAt && new Date(r.createdAt) >= weekAgo)
+    .reduce((sum, r) => sum + (r.estPages || 0), 0);
+
+  return { totalPages, totalReadings, streak, weekPages };
+}
+
+function computeStreak(readings) {
+  const days = new Set();
+  for (const r of readings) {
+    if (r.createdAt) days.add(localDateStr(new Date(r.createdAt)));
+  }
+
+  let streak = 0;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+
+  // If no reading today, check from yesterday
+  if (!days.has(localDateStr(d))) {
+    d.setDate(d.getDate() - 1);
+    if (!days.has(localDateStr(d))) return 0;
+  }
+
+  while (days.has(localDateStr(d))) {
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  return streak;
+}
+
+function renderStats(stats) {
+  const grid = document.getElementById('stats-grid');
+  const items = [
+    { value: stats.totalPages, label: 'Pages Read' },
+    { value: stats.totalReadings, label: 'Readings' },
+    { value: stats.streak, label: 'Day Streak' },
+    { value: stats.weekPages, label: 'Pages This Week' },
+  ];
+
+  grid.innerHTML = items.map(item => `
+    <div class="stat-card animate-in">
+      <div class="stat-value" data-target="${item.value}">0</div>
+      <div class="stat-label">${item.label}</div>
+    </div>
+  `).join('');
+
+  grid.querySelectorAll('.stat-value').forEach(el => {
+    animateValue(el, parseInt(el.dataset.target, 10));
+  });
+}
+
+function animateValue(el, target, duration = 800) {
+  if (target === 0) { el.textContent = '0'; return; }
+  const startTime = performance.now();
+  function update(now) {
+    const progress = Math.min((now - startTime) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(target * eased).toLocaleString();
+    if (progress < 1) requestAnimationFrame(update);
+  }
+  requestAnimationFrame(update);
+}
+
+// ── Heatmap ──────────────────────────────────────────────────────
+function renderHeatmap(readings) {
+  const WEEKS = 26;
+  const CELL_SIZE = 12;
+  const GAP = 3;
+
+  // Build day -> pages map using local dates
+  const dayPages = {};
+  for (const r of readings) {
+    if (!r.createdAt) continue;
+    const key = localDateStr(new Date(r.createdAt));
+    dayPages[key] = (dayPages[key] || 0) + (r.estPages || 0);
+  }
+
+  // Align start to Monday, WEEKS weeks ago
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayDow = (today.getDay() + 6) % 7; // 0=Mon, 6=Sun
+  const start = new Date(today);
+  start.setDate(start.getDate() - (WEEKS * 7) - todayDow);
+
+  const cells = [];
+  const current = new Date(start);
+  while (current <= today) {
+    const key = localDateStr(current);
+    cells.push({
+      date: new Date(current),
+      dateStr: key,
+      pages: dayPages[key] || 0,
+      dow: (current.getDay() + 6) % 7
+    });
+    current.setDate(current.getDate() + 1);
+  }
+
+  // Day labels (Mon, Wed, Fri)
+  const dayLabels = document.getElementById('hm-day-labels');
+  dayLabels.innerHTML = ['Mon', '', 'Wed', '', 'Fri', '', '']
+    .map(d => `<div class="hm-day-label">${d}</div>`).join('');
+
+  // Month labels — placed at the column where each month starts
+  const monthsEl = document.getElementById('hm-months');
+  let lastMonth = -1;
+  let colIndex = 0;
+  let monthHtml = '';
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i].dow === 0) { // Monday = new column
+      const month = cells[i].date.getMonth();
+      if (month !== lastMonth) {
+        const x = colIndex * (CELL_SIZE + GAP);
+        const label = cells[i].date.toLocaleString('default', { month: 'short' });
+        monthHtml += `<span class="hm-month-label" style="left:${x}px">${label}</span>`;
+        lastMonth = month;
+      }
+      colIndex++;
+    }
+  }
+  monthsEl.innerHTML = monthHtml;
+
+  // Grid cells
+  const gridEl = document.getElementById('hm-grid');
+  gridEl.innerHTML = cells.map(c => {
+    const level = heatmapLevel(c.pages);
+    const dateFmt = c.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const tip = c.pages > 0
+      ? `${dateFmt}: ${c.pages} pages`
+      : `${dateFmt}: No reading`;
+    return `<div class="hm-cell hm-${level}" data-tip="${esc(tip)}"></div>`;
+  }).join('');
+}
+
+function heatmapLevel(pages) {
+  if (pages === 0) return 0;
+  if (pages <= 10) return 1;
+  if (pages <= 25) return 2;
+  if (pages <= 50) return 3;
+  return 4;
+}
+
+// ── Tag filters ──────────────────────────────────────────────────
+function renderTagFilters(readings) {
+  const tagCounts = {};
+  for (const r of readings) {
+    for (const tag of (r.tags || [])) {
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+  }
+
+  const tags = Object.entries(tagCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([tag]) => tag);
+
+  const container = document.getElementById('tag-filters');
+  if (!tags.length) { container.innerHTML = ''; return; }
+
+  container.innerHTML = tags.map(tag => {
+    const color = getTagColor(tag);
+    const isActive = activeTag === tag;
+    const activeStyle = isActive
+      ? `border-color:${color}; color:${color}; background:color-mix(in srgb, ${color} 10%, transparent);`
+      : '';
+    return `<button class="tag-pill${isActive ? ' active' : ''}" data-tag="${esc(tag)}" style="${activeStyle}">${esc(tag)}</button>`;
+  }).join('');
+
+  container.querySelectorAll('.tag-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeTag = activeTag === btn.dataset.tag ? null : btn.dataset.tag;
+      renderTagFilters(allReadings);
+      renderTable(getFilteredReadings());
+    });
+  });
+}
+
+// ── Table ────────────────────────────────────────────────────────
 function renderTable(readings) {
   const wrap = document.getElementById('table-wrap');
 
   if (!readings.length) {
-    wrap.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">🦞</div>
-        <p>No readings yet</p>
-        <div class="hint">Use the popup to log your first reading.</div>
-      </div>`;
+    const hasFilter = activeTag || document.getElementById('search').value.trim();
+    wrap.innerHTML = hasFilter
+      ? `<div class="empty-state"><p>No readings match your search</p>
+         <div class="hint">Try a different search term or clear your filters.</div></div>`
+      : `<div class="empty-state"><div class="empty-icon">🦞</div>
+         <p>No readings yet</p>
+         <div class="hint">Use the popup to log your first reading.</div></div>`;
     return;
   }
 
@@ -71,26 +273,24 @@ function renderTable(readings) {
   html += '</tr></thead><tbody>';
 
   for (const r of sorted) {
-    const dateStr = formatDate(r.createdAt);
-    const tagsHtml = (r.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
-    const notesPreview = (r.notes || '').length > 60
-      ? esc(r.notes.slice(0, 60)) + '\u2026'
-      : esc(r.notes || '');
-    const hlDisplay = r.hlCount > 0
-      ? `<span class="hl-count">${r.hlCount}</span>`
-      : '<span style="color:#333">0</span>';
+    const color = getRowAccent(r.tags);
+    const tagsHtml = (r.tags || []).map(t => {
+      const tc = getTagColor(t);
+      return `<span class="tag" style="border-color:${tc}; color:${tc}; background:color-mix(in srgb, ${tc} 10%, transparent);">${esc(t)}</span>`;
+    }).join('');
+    const hlBadge = r.hlCount > 0
+      ? `<span class="hl-badge has-hl">${r.hlCount}</span>`
+      : `<span class="hl-badge no-hl">0</span>`;
 
-    html += `<tr class="row" data-pk="${esc(r.pageKey)}">
+    html += `<tr class="row" data-pk="${esc(r.pageKey)}" style="--row-accent:${color}">
       <td class="col-title" title="${esc(r.title)}">${esc(r.title || '(untitled)')}</td>
       <td class="col-author">${esc(r.author || '\u2014')}</td>
-      <td class="col-tags">${tagsHtml || '<span style="color:#333">\u2014</span>'}</td>
+      <td class="col-tags">${tagsHtml || '<span style="color:var(--text-4)">\u2014</span>'}</td>
       <td class="col-pages">${r.estPages || '\u2014'}</td>
-      <td class="col-notes"><span class="notes-preview">${notesPreview || '<span style="color:#333">\u2014</span>'}</span></td>
-      <td class="col-hl">${hlDisplay}</td>
-      <td class="col-date">${esc(dateStr)}</td>
+      <td class="col-hl">${hlBadge}</td>
+      <td class="col-date">${esc(formatDate(r.createdAt))}</td>
     </tr>`;
 
-    // Hidden detail row (populated on expand)
     html += `<tr class="detail-row" data-detail-pk="${esc(r.pageKey)}">
       <td colspan="${COLUMNS.length}"><div class="detail-content">Loading...</div></td>
     </tr>`;
@@ -99,21 +299,17 @@ function renderTable(readings) {
   html += '</tbody></table>';
   wrap.innerHTML = html;
 
-  // Wire up sort headers
+  // Sort headers
   wrap.querySelectorAll('thead th').forEach(th => {
     th.addEventListener('click', () => {
       const col = th.dataset.col;
-      if (sortCol === col) {
-        sortAsc = !sortAsc;
-      } else {
-        sortCol = col;
-        sortAsc = col === 'title' || col === 'author'; // alpha cols default ascending
-      }
+      if (sortCol === col) sortAsc = !sortAsc;
+      else { sortCol = col; sortAsc = col === 'title' || col === 'author'; }
       renderTable(getFilteredReadings());
     });
   });
 
-  // Wire up row expand/collapse
+  // Row expand
   wrap.querySelectorAll('tr.row').forEach(tr => {
     tr.addEventListener('click', () => {
       const pk = tr.dataset.pk;
@@ -123,7 +319,7 @@ function renderTable(readings) {
   });
 }
 
-// ── Sort readings ────────────────────────────────────────────────
+// ── Sort ─────────────────────────────────────────────────────────
 function sortReadings(readings) {
   const copy = [...readings];
   const dir = sortAsc ? 1 : -1;
@@ -135,7 +331,6 @@ function sortReadings(readings) {
       case 'author': va = (a.author || '').toLowerCase(); vb = (b.author || '').toLowerCase(); break;
       case 'tags':   va = (a.tags || []).join(',').toLowerCase(); vb = (b.tags || []).join(',').toLowerCase(); break;
       case 'pages':  va = a.estPages || 0; vb = b.estPages || 0; break;
-      case 'notes':  va = (a.notes || '').toLowerCase(); vb = (b.notes || '').toLowerCase(); break;
       case 'hl':     va = a.hlCount || 0; vb = b.hlCount || 0; break;
       case 'date':   va = a.createdAt || ''; vb = b.createdAt || ''; break;
       default:       va = ''; vb = '';
@@ -148,46 +343,43 @@ function sortReadings(readings) {
   return copy;
 }
 
-// ── Toggle detail row ────────────────────────────────────────────
+// ── Detail toggle ────────────────────────────────────────────────
 async function toggleDetail(tr, detailTr, reading) {
   if (detailTr.classList.contains('open')) {
     detailTr.classList.remove('open');
     return;
   }
 
-  // Close any other open detail rows
   document.querySelectorAll('tr.detail-row.open').forEach(r => r.classList.remove('open'));
-
   detailTr.classList.add('open');
 
   if (!reading) {
-    detailTr.querySelector('.detail-content').innerHTML = '<span style="color:#555">Reading not found.</span>';
+    detailTr.querySelector('.detail-content').innerHTML =
+      '<span style="color:var(--text-3)">Reading not found.</span>';
     return;
   }
 
-  // Lazy-load full highlights from per-page storage
   const hlResult = await chrome.storage.local.get([reading.pageKey]);
   const highlights = Array.isArray(hlResult[reading.pageKey]) ? hlResult[reading.pageKey] : [];
-
   const container = detailTr.querySelector('.detail-content');
 
-  // Left: metadata + notes
-  let metaHtml = '<div class="detail-section"><h4>Details</h4><div class="detail-meta">';
-  metaHtml += `<div><span class="meta-label">Title:</span> ${esc(reading.title || '')}</div>`;
-  if (reading.author) metaHtml += `<div><span class="meta-label">Author:</span> ${esc(reading.author)}</div>`;
-  if (reading.tags?.length) metaHtml += `<div><span class="meta-label">Tags:</span> ${reading.tags.map(t => esc(t)).join(', ')}</div>`;
-  if (reading.estPages) metaHtml += `<div><span class="meta-label">Est. Pages:</span> ${reading.estPages}</div>`;
-  if (reading.url) metaHtml += `<div><span class="meta-label">URL:</span> <a href="${esc(reading.url)}" target="_blank" rel="noopener">${esc(reading.url)}</a></div>`;
-  metaHtml += `<div><span class="meta-label">Logged:</span> ${esc(formatDate(reading.createdAt))}</div>`;
+  // Left column: metadata + notes
+  let metaHtml = `<div><h4 class="detail-section-title">Details</h4><div class="detail-meta">`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Title</span><span class="meta-value">${esc(reading.title || '')}</span></div>`;
+  if (reading.author) metaHtml += `<div class="meta-row"><span class="meta-label">Author</span><span class="meta-value">${esc(reading.author)}</span></div>`;
+  if (reading.tags?.length) metaHtml += `<div class="meta-row"><span class="meta-label">Tags</span><span class="meta-value">${reading.tags.map(t => esc(t)).join(', ')}</span></div>`;
+  if (reading.estPages) metaHtml += `<div class="meta-row"><span class="meta-label">Pages</span><span class="meta-value">${reading.estPages}</span></div>`;
+  if (reading.url) metaHtml += `<div class="meta-row"><span class="meta-label">URL</span><span class="meta-value"><a href="${esc(reading.url)}" target="_blank" rel="noopener">${esc(reading.url)}</a></span></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Logged</span><span class="meta-value">${esc(formatDateFull(reading.createdAt))}</span></div>`;
   if (reading.updatedAt !== reading.createdAt) {
-    metaHtml += `<div><span class="meta-label">Updated:</span> ${esc(formatDate(reading.updatedAt))}</div>`;
+    metaHtml += `<div class="meta-row"><span class="meta-label">Updated</span><span class="meta-value">${esc(formatDateFull(reading.updatedAt))}</span></div>`;
   }
   metaHtml += '</div>';
   if (reading.notes) metaHtml += `<div class="detail-notes">${esc(reading.notes)}</div>`;
   metaHtml += '</div>';
 
-  // Right: highlights
-  let hlHtml = '<div class="detail-section"><h4>Highlights (' + highlights.length + ')</h4>';
+  // Right column: highlights
+  let hlHtml = `<div><h4 class="detail-section-title">Highlights (${highlights.length})</h4>`;
   if (highlights.length) {
     hlHtml += '<ul class="detail-hl-list">';
     for (const h of highlights) {
@@ -202,13 +394,13 @@ async function toggleDetail(tr, detailTr, reading) {
   }
   hlHtml += '</div>';
 
-  const actionsHtml = `<div class="detail-actions">
+  const footerHtml = `<div class="detail-footer">
     <button class="delete-btn" data-pk="${esc(reading.pageKey)}">Delete Reading</button>
   </div>`;
 
-  container.innerHTML = `<div class="detail-grid">${metaHtml}${hlHtml}</div>${actionsHtml}`;
+  container.innerHTML = `<div class="detail-panel"><div class="detail-grid">${metaHtml}${hlHtml}</div>${footerHtml}</div>`;
 
-  // Wire up delete with confirmation
+  // Delete with confirmation
   const deleteBtn = container.querySelector('.delete-btn');
   let confirmPending = false;
   deleteBtn.addEventListener('click', async (e) => {
@@ -217,7 +409,6 @@ async function toggleDetail(tr, detailTr, reading) {
       confirmPending = true;
       deleteBtn.textContent = 'Click again to confirm';
       deleteBtn.classList.add('confirm');
-      // Reset after 3s if not confirmed
       setTimeout(() => {
         if (confirmPending) {
           confirmPending = false;
@@ -229,37 +420,40 @@ async function toggleDetail(tr, detailTr, reading) {
     }
     await deleteReading(reading.pageKey);
   });
+
+  detailTr.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-// ── Delete a reading + its highlights from storage ───────────────
+// ── Delete ───────────────────────────────────────────────────────
 async function deleteReading(pageKey) {
   const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
   delete ocReadings[pageKey];
   await chrome.storage.local.set({ ocReadings });
-
-  // Also remove per-page highlights if they exist
   await chrome.storage.local.remove(pageKey);
 
-  // Remove from in-memory list and re-render
   allReadings = allReadings.filter(r => r.pageKey !== pageKey);
   document.getElementById('total-count').textContent =
     `${allReadings.length} reading${allReadings.length !== 1 ? 's' : ''}`;
+
+  renderStats(computeStats(allReadings));
+  renderHeatmap(allReadings);
+  renderTagFilters(allReadings);
   renderTable(getFilteredReadings());
 }
 
-// ── Search / filter ──────────────────────────────────────────────
+// ── Filter ───────────────────────────────────────────────────────
 function getFilteredReadings() {
   const query = document.getElementById('search').value.trim().toLowerCase();
-  if (!query) return allReadings;
-
   return allReadings.filter(r => {
-    const searchable = [
-      r.title || '',
-      r.author || '',
-      (r.tags || []).join(' '),
-      r.notes || ''
-    ].join(' ').toLowerCase();
-    return searchable.includes(query);
+    if (activeTag && !(r.tags || []).includes(activeTag)) return false;
+    if (query) {
+      const searchable = [
+        r.title || '', r.author || '',
+        (r.tags || []).join(' '), r.notes || ''
+      ].join(' ').toLowerCase();
+      if (!searchable.includes(query)) return false;
+    }
+    return true;
   });
 }
 
@@ -267,13 +461,41 @@ document.getElementById('search').addEventListener('input', () => {
   renderTable(getFilteredReadings());
 });
 
+// Keyboard: "/" to focus search, Escape to close detail
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && !e.ctrlKey && !e.metaKey && document.activeElement.tagName !== 'INPUT') {
+    e.preventDefault();
+    document.getElementById('search').focus();
+  }
+  if (e.key === 'Escape') {
+    document.getElementById('search').blur();
+    document.querySelectorAll('tr.detail-row.open').forEach(r => r.classList.remove('open'));
+  }
+});
+
 // ── Date formatting ──────────────────────────────────────────────
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function formatDate(iso) {
   if (!iso) return '\u2014';
   const d = new Date(iso);
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${month}-${day}`;
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function formatDateFull(iso) {
+  if (!iso) return '\u2014';
+  return new Date(iso).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric'
+  });
 }
 
 // ── Init ─────────────────────────────────────────────────────────
