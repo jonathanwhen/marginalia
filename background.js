@@ -7,7 +7,7 @@ const PAGES_PER_DAY_GOAL = 150;
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'oc-highlight',
-    title: '\uD83E\uDD9E Highlight with OpenClaw',
+    title: '✦ Highlight with Marginalia',
     contexts: ['selection']
   });
   migrateReadingLog();

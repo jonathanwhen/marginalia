@@ -213,7 +213,7 @@ document.getElementById('hl-mode-btn').addEventListener('click', async () => {
   try {
     const result = await chrome.tabs.sendMessage(tab.id, { type: 'oc-toggle-highlight-mode' });
     if (result?.pdf) {
-      showToast('PDFs don\u2019t support visual highlighting \u2014 use right-click \u2192 Highlight with OpenClaw', 'error');
+      showToast('PDFs don\u2019t support visual highlighting \u2014 use right-click \u2192 Highlight with Marginalia', 'error');
       return;
     }
   } catch (e) {}

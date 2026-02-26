@@ -272,7 +272,7 @@ function renderTable(readings) {
     wrap.innerHTML = hasFilter
       ? `<div class="empty-state"><p>No readings match your search</p>
          <div class="hint">Try a different search term or clear your filters.</div></div>`
-      : `<div class="empty-state"><div class="empty-icon">🦞</div>
+      : `<div class="empty-state"><div class="empty-icon">✦</div>
          <p>No readings yet</p>
          <div class="hint">Use the popup to log your first reading.</div></div>`;
     return;

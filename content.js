@@ -135,7 +135,7 @@
     modeBanner = document.createElement('div');
     modeBanner.id = 'oc-mode-banner';
     modeBanner.innerHTML = `
-      <span class="oc-banner-icon">🦞</span>
+      <span class="oc-banner-icon">✦</span>
       <span class="oc-banner-text">Highlight mode — select text to highlight</span>
       <button id="oc-banner-exit">✕ Done</button>
     `;
@@ -249,7 +249,7 @@
     toolbar = document.createElement('div');
     toolbar.id = 'oc-toolbar';
     toolbar.innerHTML = `
-      <span>🦞</span>
+      <span>✦</span>
       <button id="oc-btn-highlight">Highlight</button>
       <div class="oc-divider"></div>
       <button id="oc-btn-comment">+ Comment</button>
@@ -437,7 +437,7 @@
 
     sidebar.innerHTML = `
       <div class="oc-sb-header">
-        <span class="oc-sb-logo">🦞</span>
+        <span class="oc-sb-logo">✦</span>
         <span class="oc-sb-title">Notes: "${truncTitle}"</span>
         <button class="oc-sb-close" title="Close (Esc)">✕</button>
       </div>
