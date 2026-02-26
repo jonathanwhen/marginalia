@@ -167,29 +167,47 @@ function renderHeatmap(readings) {
     current.setDate(current.getDate() + 1);
   }
 
-  // Day labels (Mon, Wed, Fri)
+  // Day labels — all 7 days as single letters
   const dayLabels = document.getElementById('hm-day-labels');
-  dayLabels.innerHTML = ['Mon', '', 'Wed', '', 'Fri', '', '']
+  dayLabels.innerHTML = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
     .map(d => `<div class="hm-day-label">${d}</div>`).join('');
 
-  // Month labels — placed at the column where each month starts
+  // Month labels — collect boundaries then filter overlaps
   const monthsEl = document.getElementById('hm-months');
+  const boundaries = [];
   let lastMonth = -1;
   let colIndex = 0;
-  let monthHtml = '';
   for (let i = 0; i < cells.length; i++) {
-    if (cells[i].dow === 0) { // Monday = new column
+    if (cells[i].dow === 0) {
       const month = cells[i].date.getMonth();
       if (month !== lastMonth) {
-        const x = colIndex * (CELL_SIZE + GAP);
-        const label = cells[i].date.toLocaleString('default', { month: 'short' });
-        monthHtml += `<span class="hm-month-label" style="left:${x}px">${label}</span>`;
+        boundaries.push({
+          label: cells[i].date.toLocaleString('default', { month: 'short' }),
+          col: colIndex
+        });
         lastMonth = month;
       }
       colIndex++;
     }
   }
-  monthsEl.innerHTML = monthHtml;
+  // Drop labels that are too close — when two overlap, skip the earlier (partial) month
+  const MIN_COL_GAP = 4;
+  const kept = [];
+  for (let i = 0; i < boundaries.length; i++) {
+    if (kept.length === 0) {
+      // If first month only has a sliver before the next, skip it
+      if (i + 1 < boundaries.length && boundaries[i + 1].col - boundaries[i].col < MIN_COL_GAP) {
+        continue;
+      }
+      kept.push(boundaries[i]);
+    } else if (boundaries[i].col - kept[kept.length - 1].col >= MIN_COL_GAP) {
+      kept.push(boundaries[i]);
+    }
+  }
+  monthsEl.innerHTML = kept.map(b => {
+    const x = b.col * (CELL_SIZE + GAP);
+    return `<span class="hm-month-label" style="left:${x}px">${b.label}</span>`;
+  }).join('');
 
   // Grid cells
   const gridEl = document.getElementById('hm-grid');
