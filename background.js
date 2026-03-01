@@ -179,6 +179,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     setupFlushAlarm(msg.intervalMinutes).then(() => sendResponse({ ok: true }));
     return true;
   }
+  if (msg.type === 'oc-restore-from-github') {
+    restoreFromGitHub().then(result => sendResponse(result));
+    return true;
+  }
 });
 
 // ── Estimate page count from tab's word count ───────────────────────
@@ -445,6 +449,95 @@ async function syncReadings() {
   const synced = allOk ? changedKeys.length : 0;
   const failed = allOk ? 0 : changedKeys.length;
   return { synced, failed, githubOk, telegramOk };
+}
+
+// ── Restore from GitHub backup ───────────────────────────────────────
+async function restoreFromGitHub() {
+  const { ghToken, ghOwner, ghRepo, ghPath } =
+    await chrome.storage.sync.get(['ghToken', 'ghOwner', 'ghRepo', 'ghPath']);
+
+  if (!ghToken || !ghOwner || !ghRepo) {
+    return { error: 'GitHub sync not configured — set it up above first' };
+  }
+
+  const path = ghPath || 'reading-log.json';
+
+  try {
+    // Fetch the file content from GitHub
+    const res = await fetch(
+      `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${path}`,
+      { headers: { Authorization: `Bearer ${ghToken}`, Accept: 'application/vnd.github.v3+json' } }
+    );
+    if (res.status === 404) return { error: 'reading-log.json not found in repo' };
+    if (!res.ok) return { error: `GitHub API error: ${res.status}` };
+
+    const data = await res.json();
+    // Decode base64 content (handle Unicode)
+    const content = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
+    const payload = JSON.parse(content);
+
+    if (!payload.readings || typeof payload.readings !== 'object') {
+      return { error: 'Invalid backup format — no readings found' };
+    }
+
+    // Merge into existing data (don't overwrite — merge)
+    const existingReadings = await getReadings();
+    let restored = 0;
+
+    const highlightsToSet = {};
+
+    for (const [pageKey, entry] of Object.entries(payload.readings)) {
+      // Only restore if this reading doesn't already exist locally
+      if (!existingReadings[pageKey]) {
+        const now = new Date().toISOString();
+        existingReadings[pageKey] = {
+          title: entry.title || '',
+          author: entry.author || '',
+          url: entry.url || pageKey,
+          tags: entry.tags || [],
+          notes: entry.notes || '',
+          estPages: entry.estPages || 0,
+          createdAt: entry.createdAt || now,
+          updatedAt: entry.updatedAt || now,
+          syncedAt: entry.updatedAt || now  // Mark as synced (came from GitHub)
+        };
+        restored++;
+      }
+
+      // Restore highlights if we don't have any locally for this page
+      if (entry.highlights?.length) {
+        highlightsToSet[pageKey] = entry.highlights;
+      }
+    }
+
+    // Save readings
+    await saveReadings(existingReadings);
+
+    // Restore highlights — only for pages that have no local highlights
+    if (Object.keys(highlightsToSet).length) {
+      const existingHl = await chrome.storage.local.get(Object.keys(highlightsToSet));
+      const toWrite = {};
+      for (const [key, hl] of Object.entries(highlightsToSet)) {
+        const existing = existingHl[key];
+        if (!existing || !Array.isArray(existing) || existing.length === 0) {
+          toWrite[key] = hl;
+        }
+      }
+      if (Object.keys(toWrite).length) {
+        await chrome.storage.local.set(toWrite);
+      }
+    }
+
+    // Cache the SHA for future pushes
+    await chrome.storage.local.set({ ocGitHubSha: data.sha });
+
+    await updateBadge();
+
+    const total = Object.keys(payload.readings).length;
+    return { ok: true, restored, total };
+  } catch (e) {
+    return { error: `Restore failed: ${e.message}` };
+  }
 }
 
 // ── Badge: show pending count (unsynced readings) ───────────────────

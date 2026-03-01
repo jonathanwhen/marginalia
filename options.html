@@ -65,6 +65,18 @@
   <button id="save">Save</button>
   <span class="saved" id="saved-msg">Saved ✓</span>
 
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Restore</h2>
+
+  <div class="field">
+    <div class="hint" style="margin-bottom:10px;">Restore all readings and highlights from backup. Merges with existing data (won't overwrite).</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="restore-gh-btn" style="background:none; border:1px solid #e8a87c; color:#e8a87c;">Restore from GitHub</button>
+      <button id="restore-file-btn" style="background:none; border:1px solid #e8a87c; color:#e8a87c;">Restore from File</button>
+      <input type="file" id="restore-file-input" accept=".json" hidden />
+    </div>
+    <div class="saved" id="restore-msg" style="margin-top:8px;"></div>
+  </div>
+
   <script src="options.js"></script>
 </body>
 </html>
