@@ -33,7 +33,16 @@ body {
 .lib-logo { font-size: 28px; }
 .lib-title { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
 .lib-subtitle { font-size: 12px; color: var(--text-3); margin-top: 2px; }
-.lib-count { margin-left: auto; font-size: 12px; color: var(--text-3); }
+.lib-header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.lib-count { font-size: 12px; color: var(--text-3); }
+.delete-all-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-3); font-size: 11px; padding: 6px 14px;
+  cursor: pointer; transition: all 0.15s; font-family: var(--font);
+}
+.delete-all-btn:hover { color: var(--red); border-color: var(--red); }
+.delete-all-btn.confirm { color: var(--red); border-color: var(--red); background: rgba(235,87,87,0.1); }
+.delete-all-btn.hidden { display: none; }
 
 /* ── Import Zone ── */
 .import-zone {

@@ -34,6 +34,7 @@ const tagFilters = document.getElementById('tag-filters');
 const sortSelect = document.getElementById('sort-select');
 const grid = document.getElementById('transcript-grid');
 const countEl = document.getElementById('lib-count');
+const deleteAllBtn = document.getElementById('btn-delete-all');
 
 // ── Import: file/folder selection ────────────────────────────────────
 document.getElementById('btn-files').addEventListener('click', (e) => {
@@ -168,9 +169,14 @@ async function importSingleFile(file) {
 
 // ── Text extraction ──────────────────────────────────────────────────
 // Extracts text from all pages and builds clean HTML paragraphs.
-// Merges lines within a paragraph by comparing the Y gap against the
-// font height: a normal line break is ~1x the font height, while a
-// paragraph break has a noticeably larger gap (>1.4x font height).
+//
+// Key challenges with PDF text extraction:
+// 1. Lines within a paragraph have Y gaps ~= font height; paragraph
+//    breaks have larger gaps (>1.4x font height).
+// 2. Math/tables split characters into individual items positioned
+//    spatially — we use X-gap analysis to decide whether to join
+//    directly (tight), add a space (normal), or add a tab (column gap).
+// 3. Hyphenated words at line ends get rejoined.
 async function extractTextAsHtml(doc) {
   const paragraphs = [];
   let totalWords = 0;
@@ -179,54 +185,70 @@ async function extractTextAsHtml(doc) {
     const page = await doc.getPage(i);
     const textContent = await page.getTextContent();
 
-    let currentParagraph = '';
-    let lastY = null;
-    let lastHeight = 12; // default font height fallback
+    // First pass: build lines by grouping items with similar Y coords.
+    // This lets us handle X-position spacing correctly within each line.
+    const lines = [];
+    let currentLine = [];
+    let lineY = null;
 
     for (const item of textContent.items) {
-      if (!item.str) continue;
-      const y = item.transform[5]; // Y position (PDF coords: increases upward)
-      const height = item.height || lastHeight;
+      if (!item.str && !item.hasEOL) continue;
+      const y = item.transform[5];
+      const height = item.height || 12;
 
-      if (lastY !== null) {
-        const yGap = Math.abs(y - lastY);
+      if (lineY !== null && Math.abs(y - lineY) > 1) {
+        // Different Y — start a new line
+        if (currentLine.length) lines.push({ items: currentLine, y: lineY, height: currentLine[0].height || 12 });
+        currentLine = [];
+      }
+      if (item.str) currentLine.push(item);
+      lineY = y;
+    }
+    if (currentLine.length) lines.push({ items: currentLine, y: lineY, height: currentLine[0].height || 12 });
 
-        if (yGap < 1) {
-          // Same line — just append
-          if (currentParagraph && !currentParagraph.endsWith(' ') && !item.str.startsWith(' ')) {
-            currentParagraph += ' ';
-          }
-          currentParagraph += item.str;
-        } else if (yGap > height * 1.4) {
-          // Gap is larger than normal line spacing — paragraph break
+    // Second pass: merge items within each line using X-gap analysis,
+    // then merge lines into paragraphs using Y-gap analysis.
+    let currentParagraph = '';
+    let lastLineY = null;
+    let lastLineHeight = 12;
+
+    for (const line of lines) {
+      const lineText = joinLineItems(line.items);
+      if (!lineText) continue;
+
+      if (lastLineY !== null) {
+        const yGap = Math.abs(line.y - lastLineY);
+
+        if (yGap > lastLineHeight * 1.4) {
+          // Paragraph break
           if (currentParagraph.trim()) {
             paragraphs.push(currentParagraph.trim());
-            totalWords += currentParagraph.trim().split(/\s+/).filter(w => w.length > 0).length;
+            totalWords += countWords(currentParagraph);
           }
-          currentParagraph = item.str;
+          currentParagraph = lineText;
         } else {
-          // Normal line break within paragraph — merge with space
-          if (currentParagraph && !currentParagraph.endsWith(' ') && !currentParagraph.endsWith('-')) {
-            currentParagraph += ' ';
-          }
-          // Handle hyphenated words split across lines
+          // Same paragraph — merge lines
           if (currentParagraph.endsWith('-')) {
-            currentParagraph = currentParagraph.slice(0, -1);
+            // Rejoin hyphenated word
+            currentParagraph = currentParagraph.slice(0, -1) + lineText;
+          } else if (currentParagraph && !currentParagraph.endsWith(' ')) {
+            currentParagraph += ' ' + lineText;
+          } else {
+            currentParagraph += lineText;
           }
-          currentParagraph += item.str;
         }
       } else {
-        currentParagraph = item.str;
+        currentParagraph = lineText;
       }
 
-      lastY = y;
-      lastHeight = height;
+      lastLineY = line.y;
+      lastLineHeight = line.height;
     }
 
     // Flush last paragraph of page
     if (currentParagraph.trim()) {
       paragraphs.push(currentParagraph.trim());
-      totalWords += currentParagraph.trim().split(/\s+/).filter(w => w.length > 0).length;
+      totalWords += countWords(currentParagraph);
     }
   }
 
@@ -237,6 +259,45 @@ async function extractTextAsHtml(doc) {
     .join('\n');
 
   return { html, wordCount: totalWords };
+}
+
+// Join text items within a single line using X-position gap analysis.
+// Tight items (split characters like "0",".",  "1") → join directly.
+// Normal gap → single space. Large gap (table columns) → tab.
+function joinLineItems(items) {
+  if (!items.length) return '';
+  let result = items[0].str;
+  for (let i = 1; i < items.length; i++) {
+    const prev = items[i - 1];
+    const curr = items[i];
+
+    // Estimate where the previous item ends on the X axis
+    const prevEnd = prev.transform[4] + (prev.width || 0);
+    const currStart = curr.transform[4];
+    const gap = currStart - prevEnd;
+
+    // Estimate a "space width" from font height (~0.3x height is typical)
+    const spaceWidth = (curr.height || 12) * 0.3;
+
+    if (gap < spaceWidth * 0.3) {
+      // Tight — characters belong together (e.g. "0" + "." + "1" → "0.1")
+      result += curr.str;
+    } else if (gap > spaceWidth * 4) {
+      // Large gap — likely table column separator
+      result += '\t' + curr.str;
+    } else {
+      // Normal word spacing
+      if (!result.endsWith(' ') && !curr.str.startsWith(' ')) {
+        result += ' ';
+      }
+      result += curr.str;
+    }
+  }
+  return result;
+}
+
+function countWords(str) {
+  return str.trim().split(/\s+/).filter(w => w.length > 0).length;
 }
 
 function escHtml(str) {
@@ -259,6 +320,7 @@ async function loadTranscripts() {
 
   countEl.textContent = `${allTranscripts.length} transcript${allTranscripts.length !== 1 ? 's' : ''}`;
   toolbar.style.display = allTranscripts.length > 0 ? 'flex' : 'none';
+  deleteAllBtn.classList.toggle('hidden', allTranscripts.length === 0);
 
   renderTagFilters();
   renderGrid();
@@ -434,6 +496,45 @@ async function deleteLibraryItem(pageKey) {
 
   await loadTranscripts();
 }
+
+// ── Delete all ───────────────────────────────────────────────────────
+let deleteAllConfirm = false;
+deleteAllBtn.addEventListener('click', async () => {
+  if (!deleteAllConfirm) {
+    deleteAllConfirm = true;
+    deleteAllBtn.textContent = 'Click again to confirm';
+    deleteAllBtn.classList.add('confirm');
+    setTimeout(() => {
+      if (deleteAllConfirm) {
+        deleteAllConfirm = false;
+        deleteAllBtn.textContent = 'Delete All';
+        deleteAllBtn.classList.remove('confirm');
+      }
+    }, 3000);
+    return;
+  }
+  deleteAllConfirm = false;
+  deleteAllBtn.textContent = 'Deleting...';
+  deleteAllBtn.disabled = true;
+
+  // Batch delete: remove all transcripts from IndexedDB and chrome.storage.local
+  const keys = allTranscripts.map(t => t.pageKey);
+  for (const key of keys) {
+    await deleteTranscript(key);
+  }
+  // Remove all from ocReadings and highlights
+  const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
+  for (const key of keys) {
+    delete ocReadings[key];
+  }
+  await chrome.storage.local.set({ ocReadings });
+  if (keys.length) await chrome.storage.local.remove(keys);
+
+  deleteAllBtn.textContent = 'Delete All';
+  deleteAllBtn.disabled = false;
+  deleteAllBtn.classList.remove('confirm');
+  await loadTranscripts();
+});
 
 // ── Search (debounced) ───────────────────────────────────────────────
 let searchTimer = null;
