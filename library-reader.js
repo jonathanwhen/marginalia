@@ -1,239 +1,481 @@
+import * as pdfjsLib from './lib/pdf.min.mjs';
 import { getTranscript } from './lib/db.js';
 
-// ── State ────────────────────────────────────────────────────────────
+pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
+
+// ── State ───────────────────────────────────────────────────────────
+let pdfDoc = null;
+let currentScale = 1.5;
 let currentPageKey = null;
+let currentTitle = '';
+let pageContainers = [];
 let highlights = [];
 let highlightMode = false;
+let activeColor = 'orange';
 let sidebarSaveTimer = null;
+let pendingHighlight = null;
+let positionSaveTimer = null;
 
-// ── DOM refs ─────────────────────────────────────────────────────────
-const article = document.getElementById('article');
+const SCALE_STEP = 0.25;
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 4.0;
+const RENDER_BUFFER = 2;
+
+// Search state
+let searchMatches = [];
+let searchIndex = -1;
+let pageTexts = null;
+
+// ── DOM refs ────────────────────────────────────────────────────────
+const viewer = document.getElementById('viewer');
+const viewerContainer = document.getElementById('viewer-container');
+const statusText = document.getElementById('status-text');
+const zoomLevel = document.getElementById('zoom-level');
 const toolbarTitle = document.getElementById('toolbar-title');
 const sidebar = document.getElementById('sidebar');
-const sbNotes = document.getElementById('sb-notes');
-const sbStatus = document.getElementById('sb-status');
-const sbHlHeader = document.getElementById('sb-hl-header');
-const sbHlList = document.getElementById('sb-hl-list');
 const hlToolbar = document.getElementById('hl-toolbar');
 const annPopup = document.getElementById('ann-popup');
 const annInput = document.getElementById('ann-input');
 const noteBubble = document.getElementById('note-bubble');
 const modeBanner = document.getElementById('mode-banner');
+const searchBar = document.getElementById('search-bar');
+const searchInput = document.getElementById('search-input');
+const searchCount = document.getElementById('search-count');
+const toast = document.getElementById('toast');
 
-// ── Load transcript from IndexedDB ───────────────────────────────────
+// ── Color map for highlight rendering ────────────────────────────────
+const HL_COLORS = {
+  orange: 'rgba(232, 168, 124, 0.8)',
+  green:  'rgba(111, 207, 151, 0.8)',
+  blue:   'rgba(100, 181, 246, 0.8)',
+  pink:   'rgba(240, 98, 146, 0.8)'
+};
+
+// ── Init ─────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
 const pageKey = params.get('key');
-
 if (pageKey) {
   currentPageKey = pageKey;
-  loadTranscript(pageKey);
-} else {
-  article.innerHTML = '<p style="color:#555;">No transcript key provided.</p>';
+  loadLibraryPdf(pageKey);
 }
 
-async function loadTranscript(key) {
+// ── Toolbar handlers ─────────────────────────────────────────────────
+document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(currentScale + SCALE_STEP));
+document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(currentScale - SCALE_STEP));
+document.getElementById('btn-sidebar').addEventListener('click', toggleSidebar);
+document.getElementById('sb-close').addEventListener('click', toggleSidebar);
+document.getElementById('btn-highlight-mode').addEventListener('click', () => {
+  if (highlightMode) exitHighlightMode(); else enterHighlightMode();
+});
+document.getElementById('banner-exit').addEventListener('click', exitHighlightMode);
+document.getElementById('btn-search').addEventListener('click', toggleSearch);
+document.getElementById('btn-export').addEventListener('click', exportHighlightsAsMarkdown);
+
+// Color picker
+document.querySelectorAll('.color-dot').forEach(dot => {
+  dot.addEventListener('click', () => {
+    document.querySelector('.color-dot.active')?.classList.remove('active');
+    dot.classList.add('active');
+    activeColor = dot.dataset.color;
+  });
+});
+
+// Search bar
+document.getElementById('search-close').addEventListener('click', closeSearch);
+document.getElementById('search-prev').addEventListener('click', () => navigateSearch(-1));
+document.getElementById('search-next').addEventListener('click', () => navigateSearch(1));
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchInput._timer);
+  searchInput._timer = setTimeout(() => performSearch(searchInput.value), 200);
+});
+searchInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    navigateSearch(e.shiftKey ? -1 : 1);
+  }
+  if (e.key === 'Escape') closeSearch();
+});
+
+// ── Load PDF from IndexedDB ──────────────────────────────────────────
+async function loadLibraryPdf(key) {
   const transcript = await getTranscript(key);
   if (!transcript) {
-    article.innerHTML = '<p style="color:#555;">Transcript not found.</p>';
+    statusText.textContent = 'Document not found.';
     return;
   }
 
-  document.title = `Marginalia — ${transcript.title}`;
-  toolbarTitle.textContent = transcript.title;
-  article.innerHTML = transcript.content;
+  if (!transcript.pdfData) {
+    statusText.textContent = 'This document needs to be re-imported (old format).';
+    return;
+  }
 
-  // Load highlights and apply
+  currentTitle = transcript.title || '';
+  document.title = `Marginalia — ${currentTitle}`;
+  toolbarTitle.textContent = currentTitle;
+
+  const doc = await pdfjsLib.getDocument({ data: transcript.pdfData }).promise;
+  await renderDocument(doc);
+  restoreReadingPosition();
+}
+
+// ── Render document ──────────────────────────────────────────────────
+async function renderDocument(doc) {
+  pdfDoc = doc;
+  const numPages = doc.numPages;
+
+  statusText.textContent = `Page 1 of ${numPages}`;
+
+  // Clear existing pages
+  pageContainers.forEach(p => p.container.remove());
+  pageContainers = [];
+
+  // Load highlights
   await loadHighlights();
-  applyStoredHighlights();
 
-  // Load sidebar notes
+  // Get first page for default dimensions
+  const firstPage = await doc.getPage(1);
+  const defaultViewport = firstPage.getViewport({ scale: currentScale });
+
+  for (let i = 0; i < numPages; i++) {
+    const container = document.createElement('div');
+    container.className = 'page-container';
+    container.style.width = defaultViewport.width + 'px';
+    container.style.height = defaultViewport.height + 'px';
+    container.dataset.pageIndex = i;
+
+    const canvas = document.createElement('canvas');
+    container.appendChild(canvas);
+
+    const textLayerDiv = document.createElement('div');
+    textLayerDiv.className = 'textLayer';
+    container.appendChild(textLayerDiv);
+
+    viewer.appendChild(container);
+    pageContainers.push({
+      container, canvas, textLayer: textLayerDiv,
+      rendered: false, pageIndex: i, rendering: false, renderTask: null
+    });
+  }
+
+  setupIntersectionObserver();
+  ensureReadingExists(numPages);
+
+  // Open sidebar by default
+  if (sidebar.classList.contains('hidden')) toggleSidebar();
+
   loadSidebarNotes();
   refreshSidebarHighlights();
 }
 
-// ── Storage helpers (direct chrome.storage.local — extension page) ───
+// ── Lazy rendering via IntersectionObserver ───────────────────────────
+let observer = null;
+
+function setupIntersectionObserver() {
+  if (observer) observer.disconnect();
+
+  observer = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const idx = parseInt(entry.target.dataset.pageIndex);
+      if (entry.isIntersecting) {
+        for (let i = Math.max(0, idx - RENDER_BUFFER); i <= Math.min(pageContainers.length - 1, idx + RENDER_BUFFER); i++) {
+          renderPage(i);
+        }
+      }
+    }
+    updateCurrentPage();
+  }, {
+    root: viewerContainer,
+    rootMargin: '200px 0px'
+  });
+
+  pageContainers.forEach(p => observer.observe(p.container));
+}
+
+// ── Render a single page ─────────────────────────────────────────────
+async function renderPage(pageIndex) {
+  const pc = pageContainers[pageIndex];
+  if (!pc || pc.rendered || pc.rendering) return;
+  pc.rendering = true;
+
+  try {
+    const page = await pdfDoc.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: currentScale });
+
+    pc.container.style.width = viewport.width + 'px';
+    pc.container.style.height = viewport.height + 'px';
+
+    // Canvas rendering
+    const canvas = pc.canvas;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = viewport.width * dpr;
+    canvas.height = viewport.height * dpr;
+    canvas.style.width = viewport.width + 'px';
+    canvas.style.height = viewport.height + 'px';
+    ctx.scale(dpr, dpr);
+
+    const renderTask = page.render({ canvasContext: ctx, viewport });
+    pc.renderTask = renderTask;
+    await renderTask.promise;
+
+    // Text layer
+    pc.textLayer.innerHTML = '';
+    pc.textLayer.style.setProperty('--scale-factor', currentScale);
+
+    const textLayer = new pdfjsLib.TextLayer({
+      textContentSource: page.streamTextContent(),
+      container: pc.textLayer,
+      viewport,
+    });
+    await textLayer.render();
+
+    pc.rendered = true;
+    pc.renderTask = null;
+
+    // Apply highlights to this page
+    applyHighlightsToPage(pageIndex);
+  } catch (err) {
+    if (err.name === 'RenderingCancelledException') return;
+    console.error(`Error rendering page ${pageIndex + 1}:`, err);
+  } finally {
+    pc.rendering = false;
+  }
+}
+
+// ── Zoom ─────────────────────────────────────────────────────────────
+function setZoom(newScale) {
+  newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, newScale));
+  if (newScale === currentScale) return;
+
+  const scrollFraction = viewerContainer.scrollTop / (viewerContainer.scrollHeight || 1);
+  currentScale = newScale;
+  zoomLevel.textContent = Math.round(currentScale * 100) + '%';
+
+  reRenderAllPages().then(() => {
+    viewerContainer.scrollTop = scrollFraction * viewerContainer.scrollHeight;
+  });
+}
+
+async function reRenderAllPages() {
+  if (!pdfDoc) return;
+
+  const firstPage = await pdfDoc.getPage(1);
+  const viewport = firstPage.getViewport({ scale: currentScale });
+
+  for (const pc of pageContainers) {
+    if (pc.renderTask) {
+      try { pc.renderTask.cancel(); } catch {}
+      pc.renderTask = null;
+    }
+    pc.container.style.width = viewport.width + 'px';
+    pc.container.style.height = viewport.height + 'px';
+    pc.rendered = false;
+    pc.rendering = false;
+    pc.canvas.width = 0;
+    pc.canvas.height = 0;
+    pc.textLayer.innerHTML = '';
+  }
+
+  setupIntersectionObserver();
+}
+
+// ── Page tracking ────────────────────────────────────────────────────
+function updateCurrentPage() {
+  if (!pdfDoc) return;
+  const containerRect = viewerContainer.getBoundingClientRect();
+  const midY = containerRect.top + containerRect.height / 2;
+
+  for (const pc of pageContainers) {
+    const rect = pc.container.getBoundingClientRect();
+    if (rect.top <= midY && rect.bottom >= midY) {
+      statusText.textContent = `Page ${pc.pageIndex + 1} of ${pdfDoc.numPages}`;
+      return;
+    }
+  }
+}
+
+function getCurrentPageIndex() {
+  const containerRect = viewerContainer.getBoundingClientRect();
+  const midY = containerRect.top + containerRect.height / 2;
+  for (const pc of pageContainers) {
+    const rect = pc.container.getBoundingClientRect();
+    if (rect.top <= midY && rect.bottom >= midY) return pc.pageIndex;
+  }
+  return 0;
+}
+
+viewerContainer.addEventListener('scroll', () => {
+  updateCurrentPage();
+  clearTimeout(positionSaveTimer);
+  positionSaveTimer = setTimeout(saveReadingPosition, 2000);
+});
+
+// ── Reading position memory ──────────────────────────────────────────
+function saveReadingPosition() {
+  if (!currentPageKey || !isContextValid()) return;
+  const scrollFraction = viewerContainer.scrollTop / (viewerContainer.scrollHeight || 1);
+  chrome.storage.local.set({ [`pos:${currentPageKey}`]: { scrollFraction } });
+}
+
+async function restoreReadingPosition() {
+  if (!currentPageKey || !isContextValid()) return;
+  try {
+    const key = `pos:${currentPageKey}`;
+    const result = await chrome.storage.local.get([key]);
+    const pos = result[key];
+    if (pos?.scrollFraction) {
+      requestAnimationFrame(() => {
+        viewerContainer.scrollTop = pos.scrollFraction * viewerContainer.scrollHeight;
+      });
+    }
+  } catch {}
+}
+
+// ── Storage helpers ──────────────────────────────────────────────────
+function isContextValid() {
+  try { return !!chrome.runtime?.id; } catch { return false; }
+}
+
 async function loadHighlights() {
-  if (!currentPageKey) { highlights = []; return; }
-  const result = await chrome.storage.local.get([currentPageKey]);
-  highlights = result[currentPageKey] || [];
+  if (!currentPageKey || !isContextValid()) { highlights = []; return; }
+  try {
+    const result = await chrome.storage.local.get([currentPageKey]);
+    highlights = result[currentPageKey] || [];
+  } catch {
+    highlights = [];
+  }
 }
 
 async function saveHighlightsToStorage() {
-  if (!currentPageKey) return;
-  await chrome.storage.local.set({ [currentPageKey]: highlights });
-}
-
-// ── Apply stored highlights to rendered HTML ─────────────────────────
-// Uses DOM text-node walking (same approach as content.js)
-function applyStoredHighlights() {
-  for (const h of highlights) {
-    injectHighlight(h);
-  }
-}
-
-function injectHighlight(h) {
-  const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    const idx = node.nodeValue.indexOf(h.text);
-    if (idx === -1) continue;
-    const range = document.createRange();
-    range.setStart(node, idx);
-    range.setEnd(node, idx + h.text.length);
-    wrapRange(range, h);
-    break;
-  }
-}
-
-function wrapRange(range, h) {
+  if (!currentPageKey || !isContextValid()) return;
   try {
-    const mark = document.createElement('mark');
-    mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
-    mark.dataset.ocId = h.id;
-    mark.title = h.comment || '';
-    range.surroundContents(mark);
-    mark.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!highlightMode) showNoteBubble(e, mark, h);
-    });
-    return mark;
-  } catch {
-    return wrapRangeMulti(range, h);
-  }
-}
-
-function wrapRangeMulti(range, h) {
-  const textNodes = [];
-  const walker = document.createTreeWalker(
-    range.commonAncestorContainer,
-    NodeFilter.SHOW_TEXT
-  );
-  let node;
-  while ((node = walker.nextNode())) {
-    if (range.intersectsNode(node)) textNodes.push(node);
-  }
-  if (textNodes.length === 0) return null;
-
-  let firstMark = null;
-  for (const tNode of textNodes) {
-    let start = 0;
-    let end = tNode.nodeValue.length;
-    if (tNode === range.startContainer) start = range.startOffset;
-    if (tNode === range.endContainer) end = range.endOffset;
-    if (start >= end) continue;
-
-    if (end < tNode.nodeValue.length) tNode.splitText(end);
-    const target = start > 0 ? tNode.splitText(start) : tNode;
-
-    const mark = document.createElement('mark');
-    mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
-    mark.dataset.ocId = h.id;
-    mark.title = h.comment || '';
-    target.parentNode.insertBefore(mark, target);
-    mark.appendChild(target);
-    mark.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!highlightMode) showNoteBubble(e, mark, h);
-    });
-    if (!firstMark) firstMark = mark;
-  }
-  return firstMark;
-}
-
-// ── Save a new highlight ─────────────────────────────────────────────
-let lastSavedText = '';
-let lastSavedTime = 0;
-
-function saveHighlight(text, range, comment, onDone) {
-  const now = Date.now();
-  if (text === lastSavedText && now - lastSavedTime < 2000) return;
-
-  const h = {
-    id: now.toString(),
-    text,
-    comment,
-    timestamp: new Date().toISOString()
-  };
-
-  const mark = wrapRange(range, h);
-  if (!mark) return;
-
-  lastSavedText = text;
-  lastSavedTime = now;
-  window.getSelection()?.removeAllRanges();
-
-  highlights.push(h);
-  saveHighlightsToStorage();
-  ensureReadingExists();
-  notifyHighlightChanged('create', text, h.id);
-  refreshSidebarHighlights();
-
-  if (onDone) onDone(h, mark);
-}
-
-function deleteHighlight(id) {
-  document.querySelectorAll(`mark[data-oc-id="${id}"]`).forEach(mark => {
-    const parent = mark.parentNode;
-    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-    parent.removeChild(mark);
-    parent.normalize();
-  });
-  highlights = highlights.filter(h => h.id !== id);
-  saveHighlightsToStorage();
-  notifyHighlightChanged('delete', '', id);
-  refreshSidebarHighlights();
-}
-
-function updateHighlightComment(id, comment) {
-  const h = highlights.find(hl => hl.id === id);
-  if (!h) return;
-  h.comment = comment;
-
-  // Update DOM marks
-  document.querySelectorAll(`mark[data-oc-id="${id}"]`).forEach(mark => {
-    mark.className = 'oc-highlight' + (comment ? ' oc-highlight-comment' : '');
-    mark.title = comment;
-  });
-
-  saveHighlightsToStorage();
-  ensureReadingExists();
-  notifyHighlightChanged('update', h.text, h.id);
-  refreshSidebarHighlights();
-}
-
-// ── Background communication ─────────────────────────────────────────
-function ensureReadingExists() {
-  if (!currentPageKey) return;
-  try {
-    chrome.runtime.sendMessage({
-      type: 'oc-upsert-reading',
-      pageKey: currentPageKey,
-      title: toolbarTitle.textContent || currentPageKey,
-      url: currentPageKey
-    });
+    await chrome.storage.local.set({ [currentPageKey]: highlights });
   } catch {}
 }
 
-function notifyHighlightChanged(action, text, highlightId) {
-  if (!currentPageKey) return;
-  try {
-    chrome.runtime.sendMessage({
-      type: 'oc-highlight-changed',
-      pageKey: currentPageKey,
-      action,
-      text,
-      highlightId
-    });
-  } catch {}
+// ── Highlight application on rendered pages ──────────────────────────
+function applyHighlightsToPage(pageIndex) {
+  const pc = pageContainers[pageIndex];
+  if (!pc || !pc.rendered) return;
+
+  const pageHighlights = highlights.filter(h => h.pageIndex === pageIndex);
+  if (!pageHighlights.length) return;
+
+  const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)'));
+  if (!spans.length) return;
+
+  for (const h of pageHighlights) {
+    applyHighlightToTextLayer(spans, h);
+  }
 }
 
-// ── Selection listener ───────────────────────────────────────────────
-document.addEventListener('mouseup', (e) => {
-  if (hlToolbar.contains(e.target)) return;
-  if (modeBanner.contains(e.target)) return;
-  if (noteBubble.contains(e.target)) return;
-  if (annPopup.contains(e.target)) return;
-  if (sidebar.contains(e.target)) return;
+function applyHighlightToTextLayer(allSpans, h) {
+  // Primary: offset-based matching
+  if (h.startOffset !== undefined && h.endOffset !== undefined) {
+    const result = findSpansByOffset(allSpans, h.startOffset, h.endOffset);
+    if (result.length > 0) {
+      wrapSpansAsHighlight(result, h);
+      return;
+    }
+  }
+
+  // Fallback: text search (supports old highlight format without offsets)
+  const allText = allSpans.map(s => s.textContent).join('');
+  const searchText = h.text;
+  const idx = allText.indexOf(searchText);
+  if (idx === -1) return;
+
+  const result = findSpansByOffset(allSpans, idx, idx + searchText.length);
+  if (result.length > 0) {
+    wrapSpansAsHighlight(result, h);
+  }
+}
+
+function findSpansByOffset(spans, startOffset, endOffset) {
+  const results = [];
+  let pos = 0;
+  for (const span of spans) {
+    const len = span.textContent.length;
+    const spanEnd = pos + len;
+    if (spanEnd <= startOffset) { pos = spanEnd; continue; }
+    if (pos >= endOffset) break;
+
+    const s = Math.max(0, startOffset - pos);
+    const e = Math.min(len, endOffset - pos);
+    results.push({ span, start: s, end: e });
+    pos = spanEnd;
+  }
+  return results;
+}
+
+function wrapSpansAsHighlight(spanRanges, h) {
+  for (const { span, start, end } of spanRanges) {
+    const text = span.textContent;
+    if (start === 0 && end === text.length) {
+      const mark = createMark(h);
+      mark.textContent = text;
+      copySpanStyles(span, mark);
+      span.parentNode.replaceChild(mark, span);
+    } else {
+      const before = text.slice(0, start);
+      const middle = text.slice(start, end);
+      const after = text.slice(end);
+
+      const parent = span.parentNode;
+      const frag = document.createDocumentFragment();
+
+      if (before) {
+        const beforeSpan = span.cloneNode(false);
+        beforeSpan.textContent = before;
+        frag.appendChild(beforeSpan);
+      }
+
+      const mark = createMark(h);
+      mark.textContent = middle;
+      copySpanStyles(span, mark);
+      frag.appendChild(mark);
+
+      if (after) {
+        const afterSpan = span.cloneNode(false);
+        afterSpan.textContent = after;
+        frag.appendChild(afterSpan);
+      }
+
+      parent.replaceChild(frag, span);
+    }
+  }
+}
+
+function copySpanStyles(from, to) {
+  const cs = from.style;
+  if (cs.left) to.style.left = cs.left;
+  if (cs.top) to.style.top = cs.top;
+  if (cs.fontSize) to.style.fontSize = cs.fontSize;
+  if (cs.fontFamily) to.style.fontFamily = cs.fontFamily;
+  if (cs.transform) to.style.transform = cs.transform;
+  if (cs.transformOrigin) to.style.transformOrigin = cs.transformOrigin;
+  if (cs.width) to.style.width = cs.width;
+}
+
+function createMark(h) {
+  const mark = document.createElement('mark');
+  const color = h.color || 'orange';
+  mark.className = `oc-highlight oc-hl-${color}${h.comment ? ' oc-highlight-comment' : ''}`;
+  mark.dataset.ocId = h.id;
+  mark.style.color = 'transparent';
+  mark.style.position = 'absolute';
+  mark.style.whiteSpace = 'pre';
+  mark.addEventListener('click', e => {
+    e.stopPropagation();
+    if (!highlightMode) showNoteBubble(e, h);
+  });
+  return mark;
+}
+
+// ── Selection and highlighting ───────────────────────────────────────
+viewerContainer.addEventListener('mouseup', e => {
+  if ([hlToolbar, annPopup, noteBubble, sidebar, modeBanner, searchBar].some(el => el?.contains(e.target))) return;
 
   hideNoteBubble();
 
@@ -241,90 +483,136 @@ document.addEventListener('mouseup', (e) => {
     const sel = window.getSelection();
     const text = sel?.toString().trim();
     if (!text || text.length < 2) {
-      if (!highlightMode) hideHlToolbar();
-      return;
-    }
-
-    const range = sel.getRangeAt(0);
-
-    // Ensure selection is within the article
-    if (!article.contains(range.commonAncestorContainer)) {
       hideHlToolbar();
       return;
     }
 
+    const pageContainer = sel.anchorNode?.parentElement?.closest('.page-container');
+    if (!pageContainer) { hideHlToolbar(); return; }
+
+    const pageIndex = parseInt(pageContainer.dataset.pageIndex);
+    const pc = pageContainers[pageIndex];
+    if (!pc) { hideHlToolbar(); return; }
+
+    const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight), mark'));
+    const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
+
+    pendingHighlight = { text, pageIndex, startOffset, endOffset };
+
     if (highlightMode) {
-      hideAnnPopup();
-      const clonedRange = range.cloneRange();
+      const h = createHighlight(pendingHighlight, '');
       sel.removeAllRanges();
-      saveHighlight(text, clonedRange, '', (h, mark) => {
-        if (mark) showAnnotationPopup(mark, h);
-      });
+      if (h) showAnnotationPopup(h);
     } else {
-      const rect = range.getBoundingClientRect();
-      showHlToolbar(rect, text, range);
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      hlToolbar.style.left = Math.max(8, rect.left + rect.width / 2 - 80) + 'px';
+      hlToolbar.style.top = Math.max(8, rect.top - 40) + 'px';
+      hlToolbar.classList.remove('hidden');
     }
   }, 10);
 });
 
-document.addEventListener('mousedown', (e) => {
+document.addEventListener('mousedown', e => {
   if (!hlToolbar.contains(e.target) && !hlToolbar.classList.contains('hidden')) hideHlToolbar();
   if (!noteBubble.contains(e.target) && !noteBubble.classList.contains('hidden')) hideNoteBubble();
   if (!annPopup.contains(e.target) && !annPopup.classList.contains('hidden')) hideAnnPopup();
 });
 
-// ── Highlight toolbar ────────────────────────────────────────────────
-let pendingText = null;
-let pendingRange = null;
+function computeSelectionOffsets(sel, spans) {
+  let totalOffset = 0;
+  const nodeOffsets = new Map();
+  for (const el of spans) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let tNode;
+    while ((tNode = walker.nextNode())) {
+      nodeOffsets.set(tNode, totalOffset);
+      totalOffset += tNode.textContent.length;
+    }
+  }
 
-function showHlToolbar(rect, text, range) {
-  pendingText = text;
-  pendingRange = range.cloneRange();
+  let startOffset = 0, endOffset = 0;
+  const anchorOff = nodeOffsets.get(sel.anchorNode);
+  const focusOff = nodeOffsets.get(sel.focusNode);
 
-  const vw = window.innerWidth;
-  hlToolbar.classList.remove('hidden');
-  let x = rect.left + rect.width / 2 + window.scrollX - hlToolbar.offsetWidth / 2;
-  x = Math.max(8, Math.min(x, vw - hlToolbar.offsetWidth - 8));
-  let y = rect.top + window.scrollY - 48;
-  y = Math.max(8, y);
+  if (anchorOff !== undefined) startOffset = anchorOff + sel.anchorOffset;
+  if (focusOff !== undefined) endOffset = focusOff + sel.focusOffset;
 
-  hlToolbar.style.left = x + 'px';
-  hlToolbar.style.top = y + 'px';
+  if (startOffset > endOffset) [startOffset, endOffset] = [endOffset, startOffset];
+
+  return { startOffset, endOffset };
 }
 
-function hideHlToolbar() { hlToolbar.classList.add('hidden'); }
-
-document.getElementById('hl-btn-highlight').addEventListener('click', (e) => {
+// ── Highlight toolbar actions ────────────────────────────────────────
+document.getElementById('hl-btn-highlight').addEventListener('click', e => {
   e.stopPropagation();
-  if (!pendingText || !pendingRange) return;
-  saveHighlight(pendingText, pendingRange, '');
+  if (!pendingHighlight) return;
+  createHighlight(pendingHighlight, '');
   hideHlToolbar();
+  window.getSelection()?.removeAllRanges();
 });
 
-document.getElementById('hl-btn-comment').addEventListener('click', (e) => {
+document.getElementById('hl-btn-comment').addEventListener('click', e => {
   e.stopPropagation();
-  if (!pendingText || !pendingRange) return;
+  if (!pendingHighlight) return;
+  const h = createHighlight(pendingHighlight, '');
   hideHlToolbar();
-  saveHighlight(pendingText, pendingRange, '', (h, mark) => {
-    if (mark) showAnnotationPopup(mark, h);
-  });
+  window.getSelection()?.removeAllRanges();
+  if (h) showAnnotationPopup(h);
 });
+
+function createHighlight(pending, comment) {
+  const h = {
+    id: crypto.randomUUID(),
+    text: pending.text.slice(0, 300),
+    comment,
+    timestamp: new Date().toISOString(),
+    pageIndex: pending.pageIndex,
+    startOffset: pending.startOffset,
+    endOffset: pending.endOffset,
+    color: activeColor
+  };
+
+  highlights.push(h);
+  saveHighlightsToStorage();
+  ensureReadingExists();
+  notifyHighlightChanged('create', h.text, h.id);
+
+  reRenderPage(pending.pageIndex);
+  refreshSidebarHighlights();
+
+  return h;
+}
+
+async function reRenderPage(pageIndex) {
+  const pc = pageContainers[pageIndex];
+  if (!pc) return;
+
+  if (pc.renderTask) {
+    try { pc.renderTask.cancel(); } catch {}
+    pc.renderTask = null;
+  }
+
+  pc.rendered = false;
+  pc.rendering = false;
+  pc.textLayer.innerHTML = '';
+  pc.canvas.width = 0;
+  pc.canvas.height = 0;
+  await renderPage(pageIndex);
+}
 
 // ── Annotation popup ─────────────────────────────────────────────────
-function showAnnotationPopup(mark, h) {
-  hideAnnPopup();
-  const rect = mark.getBoundingClientRect();
-  const vw = window.innerWidth;
-  let px = rect.left + window.scrollX;
-  px = Math.max(8, Math.min(px, vw - 270));
+function showAnnotationPopup(h) {
+  const mark = document.querySelector(`mark[data-oc-id="${CSS.escape(h.id)}"]`);
+  if (!mark) return;
 
-  annPopup.style.left = px + 'px';
-  annPopup.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+  const rect = mark.getBoundingClientRect();
+  annPopup.style.left = Math.max(8, rect.left) + 'px';
+  annPopup.style.top = (rect.bottom + 4) + 'px';
   annPopup.classList.remove('hidden');
   annInput.value = '';
   annInput.focus();
 
-  annInput.onkeydown = (e) => {
+  annInput.onkeydown = e => {
     e.stopPropagation();
     if (e.key === 'Enter') {
       const comment = annInput.value.trim();
@@ -335,16 +623,16 @@ function showAnnotationPopup(mark, h) {
   };
 }
 
-function hideAnnPopup() { annPopup.classList.add('hidden'); annInput.onkeydown = null; }
-
 // ── Note bubble ──────────────────────────────────────────────────────
-function showNoteBubble(event, anchor, h) {
+function showNoteBubble(event, h) {
   hideNoteBubble();
   hideHlToolbar();
 
   const hasComment = !!h.comment;
+  const color = HL_COLORS[h.color || 'orange'] || HL_COLORS.orange;
+
   noteBubble.innerHTML = `
-    <div class="nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
+    <div class="nb-quote" style="border-left-color:${color}">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
     ${hasComment ? `<div class="nb-comment">${escHtml(h.comment)}</div>` : ''}
     <div class="nb-edit-section" style="display:none;">
       <textarea class="nb-edit-input" placeholder="Add a note...">${escHtml(h.comment || '')}</textarea>
@@ -359,19 +647,17 @@ function showNoteBubble(event, anchor, h) {
     </div>
   `;
 
-  const x = Math.max(8, Math.min(event.clientX - 30 + window.scrollX, window.innerWidth - 300));
-  const y = event.clientY + window.scrollY + 10;
+  const x = Math.max(8, Math.min(event.clientX - 30, window.innerWidth - 300));
+  const y = event.clientY + 10;
   noteBubble.style.left = x + 'px';
   noteBubble.style.top = y + 'px';
   noteBubble.classList.remove('hidden');
 
-  // Delete
   noteBubble.querySelector('.nb-delete').addEventListener('click', () => {
     deleteHighlight(h.id);
     hideNoteBubble();
   });
 
-  // Edit
   const editSection = noteBubble.querySelector('.nb-edit-section');
   const editInput = noteBubble.querySelector('.nb-edit-input');
   const commentDiv = noteBubble.querySelector('.nb-comment');
@@ -396,7 +682,7 @@ function showNoteBubble(event, anchor, h) {
     if (commentDiv) commentDiv.style.display = '';
   });
 
-  editInput.addEventListener('keydown', (e) => {
+  editInput.addEventListener('keydown', e => {
     e.stopPropagation();
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       noteBubble.querySelector('.nb-edit-save').click();
@@ -407,19 +693,36 @@ function showNoteBubble(event, anchor, h) {
   });
 }
 
+// ── Highlight CRUD ───────────────────────────────────────────────────
+function updateHighlightComment(id, comment) {
+  const h = highlights.find(hl => hl.id === id);
+  if (!h) return;
+  h.comment = comment;
+  saveHighlightsToStorage();
+  notifyHighlightChanged('update', h.text, h.id);
+  reRenderPage(h.pageIndex);
+  refreshSidebarHighlights();
+}
+
+function deleteHighlight(id) {
+  const h = highlights.find(hl => hl.id === id);
+  if (!h) return;
+  highlights = highlights.filter(hl => hl.id !== id);
+  saveHighlightsToStorage();
+  notifyHighlightChanged('delete', '', id);
+  reRenderPage(h.pageIndex);
+  refreshSidebarHighlights();
+}
+
+// ── Hide helpers ─────────────────────────────────────────────────────
+function hideHlToolbar() { hlToolbar.classList.add('hidden'); }
+function hideAnnPopup() { annPopup.classList.add('hidden'); annInput.onkeydown = null; }
 function hideNoteBubble() { noteBubble.classList.add('hidden'); }
 
 // ── Highlight mode ───────────────────────────────────────────────────
-const btnHighlightMode = document.getElementById('btn-highlight-mode');
-
-btnHighlightMode.addEventListener('click', () => {
-  if (highlightMode) exitHighlightMode();
-  else enterHighlightMode();
-});
-
 function enterHighlightMode() {
   highlightMode = true;
-  btnHighlightMode.classList.add('active');
+  document.getElementById('btn-highlight-mode').classList.add('active');
   modeBanner.classList.remove('hidden');
   hideHlToolbar();
   hideNoteBubble();
@@ -428,69 +731,62 @@ function enterHighlightMode() {
 
 function exitHighlightMode() {
   highlightMode = false;
-  btnHighlightMode.classList.remove('active');
+  document.getElementById('btn-highlight-mode').classList.remove('active');
   modeBanner.classList.add('hidden');
   hideAnnPopup();
   window.getSelection()?.removeAllRanges();
 }
 
-document.getElementById('banner-exit').addEventListener('click', exitHighlightMode);
-
 // ── Sidebar ──────────────────────────────────────────────────────────
-const btnSidebar = document.getElementById('btn-sidebar');
-
-btnSidebar.addEventListener('click', toggleSidebar);
-document.getElementById('sb-close').addEventListener('click', toggleSidebar);
-
 function toggleSidebar() {
+  const btn = document.getElementById('btn-sidebar');
   if (sidebar.classList.contains('hidden')) {
     sidebar.classList.remove('hidden');
-    btnSidebar.classList.add('active');
-    document.body.classList.add('sidebar-open');
+    btn.classList.add('active');
     loadSidebarNotes();
     refreshSidebarHighlights();
   } else {
-    // Flush pending note save
     if (sidebarSaveTimer) {
       clearTimeout(sidebarSaveTimer);
       sidebarSaveTimer = null;
       saveSidebarNote();
     }
     sidebar.classList.add('hidden');
-    btnSidebar.classList.remove('active');
-    document.body.classList.remove('sidebar-open');
+    btn.classList.remove('active');
   }
 }
 
 function loadSidebarNotes() {
-  if (!currentPageKey) return;
+  if (!currentPageKey || !isContextValid()) return;
   try {
     chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey }, response => {
       if (response?.reading?.notes) {
-        sbNotes.value = response.reading.notes;
+        document.getElementById('sb-notes').value = response.reading.notes;
       }
     });
   } catch {}
 }
 
 function saveSidebarNote() {
-  const notes = sbNotes.value.trim();
-  if (!currentPageKey) return;
+  const notes = document.getElementById('sb-notes').value.trim();
+  const statusEl = document.getElementById('sb-status');
+  if (!currentPageKey || !isContextValid()) return;
+
   try {
     chrome.runtime.sendMessage({
       type: 'oc-upsert-reading',
       pageKey: currentPageKey,
-      title: toolbarTitle.textContent || currentPageKey,
+      title: currentTitle || currentPageKey,
       url: currentPageKey,
       notes
     }, result => {
       if (result?.ok) {
-        sbStatus.textContent = 'Saved';
-        sbStatus.className = 'sb-status saved';
+        statusEl.textContent = 'Saved';
+        statusEl.className = 'sb-status saved';
         setTimeout(() => {
-          if (sbStatus.textContent === 'Saved') {
-            sbStatus.textContent = '';
-            sbStatus.className = 'sb-status';
+          if (statusEl.textContent === 'Saved') {
+            statusEl.textContent = '';
+            statusEl.className = 'sb-status';
           }
         }, 2000);
       }
@@ -498,15 +794,16 @@ function saveSidebarNote() {
   } catch {}
 }
 
-// Notes auto-save (debounced 1s)
-sbNotes.addEventListener('input', () => {
-  sbStatus.textContent = '';
-  sbStatus.className = 'sb-status';
+// Notes auto-save
+document.getElementById('sb-notes').addEventListener('input', () => {
+  const statusEl = document.getElementById('sb-status');
+  statusEl.textContent = '';
+  statusEl.className = 'sb-status';
   clearTimeout(sidebarSaveTimer);
   sidebarSaveTimer = setTimeout(() => saveSidebarNote(), 1000);
 });
 
-sbNotes.addEventListener('keydown', (e) => {
+document.getElementById('sb-notes').addEventListener('keydown', e => {
   if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     clearTimeout(sidebarSaveTimer);
@@ -515,44 +812,296 @@ sbNotes.addEventListener('keydown', (e) => {
 });
 
 function refreshSidebarHighlights() {
-  sbHlHeader.textContent = `Highlights (${highlights.length})`;
+  const header = document.getElementById('sb-hl-header');
+  const list = document.getElementById('sb-hl-list');
+  if (!header || !list) return;
+
+  header.textContent = `Highlights (${highlights.length})`;
 
   if (!highlights.length) {
-    sbHlList.innerHTML = '<div class="sb-hl-empty">No highlights yet.</div>';
+    list.innerHTML = '<div class="sb-hl-empty">No highlights yet.</div>';
     return;
   }
 
-  sbHlList.innerHTML = highlights.map(h => `
-    <div class="sb-hl-item" data-hl-id="${escAttr(h.id)}">
-      <div class="sb-hl-quote">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}"</div>
+  list.innerHTML = highlights.map(h => {
+    const color = HL_COLORS[h.color || 'orange'] || HL_COLORS.orange;
+    return `
+    <div class="sb-hl-item" data-hl-id="${escAttr(h.id)}" data-page="${h.pageIndex ?? 0}">
+      <div class="sb-hl-quote">
+        <span class="sb-hl-color" style="background:${color}"></span>
+        <span class="sb-hl-text">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}"</span>
+      </div>
       ${h.comment ? `<div class="sb-hl-comment">\u2014 ${escHtml(h.comment)}</div>` : ''}
+      <div class="sb-hl-page">Page ${(h.pageIndex ?? 0) + 1}</div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
-  // Click to scroll to highlight in article
-  sbHlList.querySelectorAll('.sb-hl-item').forEach(item => {
+  list.querySelectorAll('.sb-hl-item').forEach(item => {
     item.addEventListener('click', () => {
-      const id = item.dataset.hlId;
-      const mark = document.querySelector(`mark[data-oc-id="${CSS.escape(id)}"]`);
-      if (mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const pageIdx = parseInt(item.dataset.page);
+      scrollToPage(pageIdx);
     });
   });
 }
 
+function scrollToPage(pageIndex) {
+  const pc = pageContainers[pageIndex];
+  if (!pc) return;
+  pc.container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ── In-PDF text search ───────────────────────────────────────────────
+function toggleSearch() {
+  if (searchBar.classList.contains('hidden')) {
+    searchBar.classList.remove('hidden');
+    searchInput.focus();
+  } else {
+    closeSearch();
+  }
+}
+
+function closeSearch() {
+  searchBar.classList.add('hidden');
+  searchInput.value = '';
+  searchCount.textContent = '';
+  clearSearchHighlights();
+  searchMatches = [];
+  searchIndex = -1;
+}
+
+async function ensurePageTexts() {
+  if (pageTexts) return;
+  if (!pdfDoc) return;
+  pageTexts = [];
+  for (let i = 1; i <= pdfDoc.numPages; i++) {
+    const page = await pdfDoc.getPage(i);
+    const tc = await page.getTextContent();
+    pageTexts.push(tc.items.map(item => item.str).join(''));
+  }
+}
+
+async function performSearch(query) {
+  clearSearchHighlights();
+  searchMatches = [];
+  searchIndex = -1;
+
+  if (!query || query.length < 2) {
+    searchCount.textContent = '';
+    return;
+  }
+
+  await ensurePageTexts();
+  const q = query.toLowerCase();
+
+  for (let i = 0; i < pageTexts.length; i++) {
+    const text = pageTexts[i].toLowerCase();
+    let pos = 0;
+    while ((pos = text.indexOf(q, pos)) !== -1) {
+      searchMatches.push({ pageIndex: i, startOffset: pos, endOffset: pos + query.length });
+      pos += query.length;
+    }
+  }
+
+  if (searchMatches.length > 0) {
+    searchCount.textContent = `${searchMatches.length} match${searchMatches.length !== 1 ? 'es' : ''}`;
+    searchIndex = 0;
+    highlightSearchMatch(searchIndex);
+  } else {
+    searchCount.textContent = 'No matches';
+  }
+}
+
+function navigateSearch(direction) {
+  if (!searchMatches.length) return;
+  clearSearchHighlights();
+  searchIndex = (searchIndex + direction + searchMatches.length) % searchMatches.length;
+  highlightSearchMatch(searchIndex);
+}
+
+function highlightSearchMatch(idx) {
+  const match = searchMatches[idx];
+  if (!match) return;
+
+  searchCount.textContent = `${idx + 1} of ${searchMatches.length}`;
+
+  const pc = pageContainers[match.pageIndex];
+  if (!pc) return;
+
+  const applyMatch = () => {
+    const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.search-match)'));
+    if (!spans.length) return;
+
+    const results = findSpansByOffset(spans, match.startOffset, match.endOffset);
+    for (const { span, start, end } of results) {
+      const text = span.textContent;
+      if (start === 0 && end === text.length) {
+        span.classList.add('search-match', 'active');
+      } else {
+        const before = text.slice(0, start);
+        const middle = text.slice(start, end);
+        const after = text.slice(end);
+        const parent = span.parentNode;
+        const frag = document.createDocumentFragment();
+        if (before) {
+          const s = span.cloneNode(false);
+          s.textContent = before;
+          frag.appendChild(s);
+        }
+        const m = span.cloneNode(false);
+        m.textContent = middle;
+        m.classList.add('search-match', 'active');
+        frag.appendChild(m);
+        if (after) {
+          const s = span.cloneNode(false);
+          s.textContent = after;
+          frag.appendChild(s);
+        }
+        parent.replaceChild(frag, span);
+      }
+    }
+  };
+
+  pc.container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  if (pc.rendered) {
+    applyMatch();
+  } else {
+    const checkRender = setInterval(() => {
+      if (pc.rendered) {
+        clearInterval(checkRender);
+        applyMatch();
+      }
+    }, 100);
+    setTimeout(() => clearInterval(checkRender), 5000);
+  }
+}
+
+function clearSearchHighlights() {
+  document.querySelectorAll('.search-match').forEach(el => {
+    el.classList.remove('search-match', 'active');
+  });
+}
+
+// ── Export highlights as Markdown ─────────────────────────────────────
+async function exportHighlightsAsMarkdown() {
+  let md = `# ${currentTitle}\n\n`;
+
+  if (highlights.length) {
+    md += `## Highlights\n\n`;
+    const sorted = [...highlights].sort((a, b) =>
+      (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || (a.startOffset ?? 0) - (b.startOffset ?? 0)
+    );
+    for (const h of sorted) {
+      md += `> ${h.text}\n`;
+      if (h.comment) md += `> — *${h.comment}*\n`;
+      const meta = [`Page ${(h.pageIndex ?? 0) + 1}`];
+      if (h.color && h.color !== 'orange') meta.push(h.color);
+      md += `> *(${meta.join(', ')})*\n\n`;
+    }
+  }
+
+  const notes = document.getElementById('sb-notes')?.value?.trim();
+  if (notes) {
+    md += `## Notes\n\n${notes}\n\n`;
+  }
+
+  md += `---\n*Exported from Marginalia on ${new Date().toLocaleDateString()}*\n`;
+
+  try {
+    await navigator.clipboard.writeText(md);
+    showToast('Highlights copied to clipboard');
+  } catch {
+    showToast('Failed to copy — check clipboard permissions');
+  }
+}
+
+function showToast(message) {
+  toast.textContent = message;
+  toast.classList.remove('hidden');
+  setTimeout(() => toast.classList.add('hidden'), 2500);
+}
+
+// ── Background communication ─────────────────────────────────────────
+function ensureReadingExists(numPages) {
+  if (!currentPageKey || !isContextValid()) return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'oc-upsert-reading',
+      pageKey: currentPageKey,
+      title: currentTitle || currentPageKey,
+      url: currentPageKey,
+      estPages: numPages || pdfDoc?.numPages || 0
+    });
+  } catch {}
+}
+
+function notifyHighlightChanged(action, text, highlightId) {
+  if (!currentPageKey || !isContextValid()) return;
+  try {
+    chrome.runtime.sendMessage({
+      type: 'oc-highlight-changed',
+      pageKey: currentPageKey,
+      action,
+      text,
+      highlightId
+    });
+  } catch {}
+}
+
 // ── Keyboard shortcuts ───────────────────────────────────────────────
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  const isInput = tag === 'INPUT' || tag === 'TEXTAREA';
+
   if (e.key === 'Escape') {
-    if (highlightMode) exitHighlightMode();
+    if (!searchBar.classList.contains('hidden')) { closeSearch(); return; }
+    if (highlightMode) { exitHighlightMode(); return; }
     hideHlToolbar();
     hideAnnPopup();
     hideNoteBubble();
-    if (!sidebar.classList.contains('hidden')) toggleSidebar();
+    return;
+  }
+
+  // Cmd+F → search
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+    e.preventDefault();
+    toggleSearch();
+    return;
+  }
+
+  // Zoom
+  if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) {
+    e.preventDefault();
+    setZoom(currentScale + SCALE_STEP);
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === '-') {
+    e.preventDefault();
+    setZoom(currentScale - SCALE_STEP);
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === '0') {
+    e.preventDefault();
+    setZoom(1.5);
+  }
+
+  // Cmd+S → save notes
+  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+    e.preventDefault();
+    clearTimeout(sidebarSaveTimer);
+    saveSidebarNote();
+  }
+
+  // H → toggle highlight mode (when not typing)
+  if (!isInput && e.key === 'h' && !e.metaKey && !e.ctrlKey) {
+    if (highlightMode) exitHighlightMode(); else enterHighlightMode();
   }
 });
 
 // ── Utility ──────────────────────────────────────────────────────────
 function escHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
 }
 
 function escAttr(str) {

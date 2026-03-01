@@ -1,5 +1,5 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
-import { getAllTranscripts, putTranscript, hasTranscript, deleteTranscript } from './lib/db.js';
+import { getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript } from './lib/db.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
 
@@ -128,9 +128,9 @@ async function importSingleFile(file) {
   // Dedup check
   if (await hasTranscript(pageKey)) return 'duplicate';
 
-  // Extract text via PDF.js
+  // Load PDF doc to get page count + extract plain text for search
   const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const { html, wordCount } = await extractTextAsHtml(doc);
+  const { plainText, wordCount } = await extractPlainText(doc);
 
   // Derive title from filename: strip extension, replace separators
   const title = file.name
@@ -142,14 +142,16 @@ async function importSingleFile(file) {
     pageKey,
     title,
     author: '',
-    content: html,
+    pdfData: arrayBuffer,      // raw PDF bytes for canvas rendering
+    content: plainText,         // plain text for library search only
     fileName: file.name,
     fileHash: hashHex,
     byteSize: arrayBuffer.byteLength,
     pageCount: doc.numPages,
     wordCount,
     importedAt: new Date().toISOString(),
-    tags: []
+    tags: [],
+    format: 'pdf'
   };
 
   await putTranscript(transcript);
@@ -166,137 +168,20 @@ async function importSingleFile(file) {
   return 'imported';
 }
 
-// ── Text extraction ──────────────────────────────────────────────────
-// Extracts text from all pages and builds clean HTML paragraphs.
-//
-// Key challenges with PDF text extraction:
-// 1. Lines within a paragraph have Y gaps ~= font height; paragraph
-//    breaks have larger gaps (>1.4x font height).
-// 2. Math/tables split characters into individual items positioned
-//    spatially — we use X-gap analysis to decide whether to join
-//    directly (tight), add a space (normal), or add a tab (column gap).
-// 3. Hyphenated words at line ends get rejoined.
-async function extractTextAsHtml(doc) {
-  const paragraphs = [];
-  let totalWords = 0;
-
+// ── Plain text extraction (for search indexing only) ─────────────────
+// PDF rendering is handled by the canvas reader (library-reader.js).
+// We just need plain text for the library search/filter functionality.
+async function extractPlainText(doc) {
+  let fullText = '';
+  let wordCount = 0;
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    const textContent = await page.getTextContent();
-
-    // First pass: build lines by grouping items with similar Y coords.
-    // This lets us handle X-position spacing correctly within each line.
-    const lines = [];
-    let currentLine = [];
-    let lineY = null;
-
-    for (const item of textContent.items) {
-      if (!item.str && !item.hasEOL) continue;
-      const y = item.transform[5];
-      const height = item.height || 12;
-
-      if (lineY !== null && Math.abs(y - lineY) > 1) {
-        // Different Y — start a new line
-        if (currentLine.length) lines.push({ items: currentLine, y: lineY, height: currentLine[0].height || 12 });
-        currentLine = [];
-      }
-      if (item.str) currentLine.push(item);
-      lineY = y;
-    }
-    if (currentLine.length) lines.push({ items: currentLine, y: lineY, height: currentLine[0].height || 12 });
-
-    // Second pass: merge items within each line using X-gap analysis,
-    // then merge lines into paragraphs using Y-gap analysis.
-    let currentParagraph = '';
-    let lastLineY = null;
-    let lastLineHeight = 12;
-
-    for (const line of lines) {
-      const lineText = joinLineItems(line.items);
-      if (!lineText) continue;
-
-      if (lastLineY !== null) {
-        const yGap = Math.abs(line.y - lastLineY);
-
-        if (yGap > lastLineHeight * 1.4) {
-          // Paragraph break
-          if (currentParagraph.trim()) {
-            paragraphs.push(currentParagraph.trim());
-            totalWords += countWords(currentParagraph);
-          }
-          currentParagraph = lineText;
-        } else {
-          // Same paragraph — merge lines
-          if (currentParagraph.endsWith('-')) {
-            // Rejoin hyphenated word
-            currentParagraph = currentParagraph.slice(0, -1) + lineText;
-          } else if (currentParagraph && !currentParagraph.endsWith(' ')) {
-            currentParagraph += ' ' + lineText;
-          } else {
-            currentParagraph += lineText;
-          }
-        }
-      } else {
-        currentParagraph = lineText;
-      }
-
-      lastLineY = line.y;
-      lastLineHeight = line.height;
-    }
-
-    // Flush last paragraph of page
-    if (currentParagraph.trim()) {
-      paragraphs.push(currentParagraph.trim());
-      totalWords += countWords(currentParagraph);
-    }
+    const tc = await page.getTextContent();
+    const text = tc.items.map(item => item.str).join(' ');
+    fullText += text + '\n';
+    wordCount += text.split(/\s+/).filter(Boolean).length;
   }
-
-  // Build HTML: wrap each paragraph in <p>, escape HTML entities
-  const html = paragraphs
-    .filter(p => p.length > 0)
-    .map(p => `<p>${escHtml(p)}</p>`)
-    .join('\n');
-
-  return { html, wordCount: totalWords };
-}
-
-// Join text items within a single line using X-position gap analysis.
-// Tight items (split characters like "0",".",  "1") → join directly.
-// Normal gap → single space. Large gap (table columns) → tab.
-function joinLineItems(items) {
-  if (!items.length) return '';
-  let result = items[0].str;
-  for (let i = 1; i < items.length; i++) {
-    const prev = items[i - 1];
-    const curr = items[i];
-
-    // Estimate where the previous item ends on the X axis
-    const prevEnd = prev.transform[4] + (prev.width || 0);
-    const currStart = curr.transform[4];
-    const gap = currStart - prevEnd;
-
-    // Estimate a "space width" from font height (~0.3x height is typical)
-    const spaceWidth = (curr.height || 12) * 0.3;
-
-    if (gap < spaceWidth * 0.3) {
-      // Tight — characters belong together (e.g. "0" + "." + "1" → "0.1")
-      result += curr.str;
-    } else if (gap > spaceWidth * 4) {
-      // Large gap — likely table column separator
-      result += '\t' + curr.str;
-    } else {
-      // Normal word spacing
-      if (!result.endsWith(' ') && !curr.str.startsWith(' ')) {
-        result += ' ';
-      }
-      result += curr.str;
-    }
-  }
-  return result;
-}
-
-function countWords(str) {
-  return str.trim().split(/\s+/).filter(w => w.length > 0).length;
+  return { plainText: fullText, wordCount };
 }
 
 function escHtml(str) {
@@ -305,7 +190,7 @@ function escHtml(str) {
 
 // ── Load and render transcripts ──────────────────────────────────────
 async function loadTranscripts() {
-  allTranscripts = await getAllTranscripts();
+  allTranscripts = await getAllTranscriptsMeta();
 
   // Enrich with highlight counts from chrome.storage.local
   if (allTranscripts.length) {
@@ -426,9 +311,7 @@ function renderGrid() {
       return `<span class="card-tag" style="border-color:${color}; color:${color}; background:color-mix(in srgb, ${color} 10%, transparent);">${escHtml(tag)}</span>`;
     }).join('');
 
-    // Strip HTML tags for preview snippet
-    const plainText = (t.content || '').replace(/<[^>]*>/g, '');
-    const preview = plainText.slice(0, 200);
+    const preview = (t.content || '').slice(0, 200);
 
     return `<div class="transcript-card" data-key="${escAttr(t.pageKey)}">
       <div class="card-title">${escHtml(t.title || '(untitled)')}</div>
@@ -489,8 +372,8 @@ async function deleteLibraryItem(pageKey) {
   delete ocReadings[pageKey];
   await chrome.storage.local.set({ ocReadings });
 
-  // Remove highlights
-  await chrome.storage.local.remove(pageKey);
+  // Remove highlights + reading position
+  await chrome.storage.local.remove([pageKey, `pos:${pageKey}`]);
 
   await loadTranscripts();
 }
