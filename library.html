@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Marginalia — Library</title>
+  <link rel="stylesheet" href="library.css">
+</head>
+<body>
+  <div class="library">
+    <header class="lib-header">
+      <div class="lib-brand">
+        <span class="lib-logo">✦</span>
+        <div>
+          <h1 class="lib-title">Library</h1>
+          <p class="lib-subtitle">Imported transcripts &amp; documents</p>
+        </div>
+      </div>
+      <span class="lib-count" id="lib-count"></span>
+    </header>
+
+    <!-- Import zone -->
+    <div class="import-zone" id="import-zone">
+      <div class="import-icon">📄</div>
+      <p class="import-text">Drop PDF files here, or click to browse</p>
+      <p class="import-hint">Supports single files, multiple files, or folders</p>
+      <input type="file" id="file-input" accept=".pdf" multiple hidden>
+      <input type="file" id="folder-input" webkitdirectory hidden>
+      <div class="import-buttons">
+        <button class="import-btn" id="btn-files">Select Files</button>
+        <button class="import-btn secondary" id="btn-folder">Select Folder</button>
+      </div>
+    </div>
+
+    <!-- Progress overlay -->
+    <div class="progress-overlay hidden" id="progress-overlay">
+      <div class="progress-card">
+        <div class="progress-title">Importing...</div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-status" id="progress-status">0 / 0</div>
+        <div class="progress-current" id="progress-current"></div>
+      </div>
+    </div>
+
+    <!-- Toolbar: search + tag filters + sort -->
+    <div class="lib-toolbar" id="lib-toolbar" style="display:none;">
+      <div class="search-wrap">
+        <input type="text" id="search" placeholder="Search transcripts..." />
+        <span class="search-hint">/</span>
+      </div>
+      <div class="tag-filters" id="tag-filters"></div>
+      <select class="sort-select" id="sort-select">
+        <option value="importedAt-desc">Newest first</option>
+        <option value="importedAt-asc">Oldest first</option>
+        <option value="title-asc">Title A–Z</option>
+        <option value="title-desc">Title Z–A</option>
+        <option value="pageCount-desc">Most pages</option>
+        <option value="wordCount-desc">Most words</option>
+      </select>
+    </div>
+
+    <!-- Transcript grid -->
+    <div class="transcript-grid" id="transcript-grid"></div>
+  </div>
+
+  <script type="module" src="library.js"></script>
+</body>
+</html>

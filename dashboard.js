@@ -37,6 +37,7 @@ const COLUMNS = [
   { key: 'pages',  label: 'Pages',  cls: 'col-pages' },
   { key: 'hl',     label: 'HL',     cls: 'col-hl' },
   { key: 'date',   label: 'Date',   cls: 'col-date' },
+  { key: 'actions',label: '',       cls: 'col-actions' },
 ];
 
 // ── Load readings ────────────────────────────────────────────────
@@ -283,6 +284,10 @@ function renderTable(readings) {
 
   let html = '<table><thead><tr>';
   for (const col of COLUMNS) {
+    if (col.key === 'actions') {
+      html += `<th class="${col.cls}"></th>`;
+      continue;
+    }
     const isActive = sortCol === col.key;
     html += `<th class="${col.cls}" data-col="${col.key}">${esc(col.label)}`;
     if (isActive) html += `<span class="sort-arrow">${arrow}</span>`;
@@ -300,13 +305,17 @@ function renderTable(readings) {
       ? `<span class="hl-badge has-hl">${r.hlCount}</span>`
       : `<span class="hl-badge no-hl">0</span>`;
 
+    const isLibrary = r.pageKey.startsWith('library:');
+    const titlePrefix = isLibrary ? '📄 ' : '';
+
     html += `<tr class="row" data-pk="${esc(r.pageKey)}" style="--row-accent:${color}">
-      <td class="col-title" title="${esc(r.title)}">${esc(r.title || '(untitled)')}</td>
+      <td class="col-title" title="${esc(r.title)}">${titlePrefix}${esc(r.title || '(untitled)')}</td>
       <td class="col-author">${esc(r.author || '\u2014')}</td>
       <td class="col-tags">${tagsHtml || '<span style="color:var(--text-4)">\u2014</span>'}</td>
       <td class="col-pages">${r.estPages || '\u2014'}</td>
       <td class="col-hl">${hlBadge}</td>
       <td class="col-date">${esc(formatDate(r.createdAt))}</td>
+      <td class="col-actions"><button class="row-delete" data-pk="${esc(r.pageKey)}" title="Delete">\u00d7</button></td>
     </tr>`;
 
     html += `<tr class="detail-row" data-detail-pk="${esc(r.pageKey)}">
@@ -324,6 +333,28 @@ function renderTable(readings) {
       if (sortCol === col) sortAsc = !sortAsc;
       else { sortCol = col; sortAsc = col === 'title' || col === 'author'; }
       renderTable(getFilteredReadings());
+    });
+  });
+
+  // Inline delete buttons
+  wrap.querySelectorAll('.row-delete').forEach(btn => {
+    let confirmPending = false;
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirmPending) {
+        confirmPending = true;
+        btn.classList.add('confirm');
+        btn.title = 'Click again to confirm';
+        setTimeout(() => {
+          if (confirmPending) {
+            confirmPending = false;
+            btn.classList.remove('confirm');
+            btn.title = 'Delete';
+          }
+        }, 3000);
+        return;
+      }
+      await deleteReading(btn.dataset.pk);
     });
   });
 
@@ -412,11 +443,16 @@ async function toggleDetail(tr, detailTr, reading) {
   }
   hlHtml += '</div>';
 
-  const footerHtml = `<div class="detail-footer">
-    <button class="delete-btn" data-pk="${esc(reading.pageKey)}">Delete Reading</button>
-  </div>`;
+  const deleteBtnHtml = `<button class="delete-btn" data-pk="${esc(reading.pageKey)}" style="background:rgba(235,87,87,0.12);border:1px solid rgba(235,87,87,0.4);border-radius:5px;color:#eb5757;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;">Delete Reading</button>`;
+  const isLibraryItem = reading.pageKey.startsWith('library:');
+  const openReaderBtnHtml = isLibraryItem
+    ? `<a href="${chrome.runtime.getURL('library-reader.html?key=' + encodeURIComponent(reading.pageKey))}" target="_blank" style="background:rgba(111,207,151,0.12);border:1px solid rgba(111,207,151,0.4);border-radius:5px;color:#6fcf97;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;text-decoration:none;display:inline-block;">Open in Reader</a>`
+    : '';
 
-  container.innerHTML = `<div class="detail-panel"><div class="detail-grid">${metaHtml}${hlHtml}</div>${footerHtml}</div>`;
+  container.innerHTML = `<div class="detail-panel">
+    <div style="display:flex;justify-content:flex-start;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #1e1e1e;">${openReaderBtnHtml}${deleteBtnHtml}</div>
+    <div class="detail-grid">${metaHtml}${hlHtml}</div>
+  </div>`;
 
   // Delete with confirmation
   const deleteBtn = container.querySelector('.delete-btn');
@@ -448,6 +484,21 @@ async function deleteReading(pageKey) {
   delete ocReadings[pageKey];
   await chrome.storage.local.set({ ocReadings });
   await chrome.storage.local.remove(pageKey);
+
+  // Clean up IndexedDB transcript for library items
+  if (pageKey.startsWith('library:')) {
+    try {
+      const req = indexedDB.open('marginaliaDB', 1);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (db.objectStoreNames.contains('transcripts')) {
+          const tx = db.transaction('transcripts', 'readwrite');
+          tx.objectStore('transcripts').delete(pageKey);
+        }
+        db.close();
+      };
+    } catch {}
+  }
 
   allReadings = allReadings.filter(r => r.pageKey !== pageKey);
   document.getElementById('total-count').textContent =

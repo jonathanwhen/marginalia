@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Marginalia — Reader</title>
+  <link rel="stylesheet" href="library-reader.css">
+</head>
+<body>
+  <!-- Toolbar -->
+  <div class="reader-toolbar" id="toolbar">
+    <div class="toolbar-left">
+      <a href="library.html" class="toolbar-back" title="Back to Library">&larr;</a>
+      <span class="toolbar-logo">✦</span>
+      <span class="toolbar-title" id="toolbar-title">Loading...</span>
+    </div>
+    <div class="toolbar-right">
+      <button class="toolbar-btn" id="btn-highlight-mode" title="Toggle highlight mode">Highlight Mode</button>
+      <button class="toolbar-btn" id="btn-sidebar" title="Toggle notes sidebar">Notes</button>
+    </div>
+  </div>
+
+  <!-- Main content area -->
+  <div class="reader-body">
+    <article id="article"></article>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="reader-sidebar hidden" id="sidebar">
+    <div class="sb-header">
+      <span class="sb-label">Notes</span>
+      <button class="sb-close" id="sb-close" title="Close (Esc)">&times;</button>
+    </div>
+    <textarea class="sb-notes" id="sb-notes" placeholder="Key takeaways, thoughts, or insights..."></textarea>
+    <div class="sb-status" id="sb-status"></div>
+    <div class="sb-divider"></div>
+    <div class="sb-hl-header" id="sb-hl-header">Highlights (0)</div>
+    <div class="sb-hl-list" id="sb-hl-list">
+      <div class="sb-hl-empty">No highlights yet.</div>
+    </div>
+  </div>
+
+  <!-- Highlight toolbar (appears on text selection outside highlight mode) -->
+  <div class="hl-toolbar hidden" id="hl-toolbar">
+    <span>✦</span>
+    <button id="hl-btn-highlight">Highlight</button>
+    <div class="hl-divider"></div>
+    <button id="hl-btn-comment">+ Comment</button>
+  </div>
+
+  <!-- Annotation popup (appears after highlight in highlight mode) -->
+  <div class="ann-popup hidden" id="ann-popup">
+    <input type="text" class="ann-input" id="ann-input" placeholder="Add a note... (Enter to save, Esc to skip)" />
+  </div>
+
+  <!-- Note bubble (click existing highlight) -->
+  <div class="note-bubble hidden" id="note-bubble"></div>
+
+  <!-- Highlight mode banner -->
+  <div class="mode-banner hidden" id="mode-banner">
+    <span class="banner-icon">✦</span>
+    <span class="banner-text">Highlight mode — select text to highlight</span>
+    <button class="banner-exit" id="banner-exit">&times; Done</button>
+  </div>
+
+  <script type="module" src="library-reader.js"></script>
+</body>
+</html>

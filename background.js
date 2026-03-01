@@ -22,6 +22,17 @@ setupFlushAlarm();
 setupDailySummaryAlarm();
 updateBadge();
 
+// ── ArXiv PDF auto-intercept → open in built-in reader ──────────────
+// Disabled: text layer quality needs improvement before auto-redirecting
+// chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+//   if (details.frameId !== 0) return;
+//   if (/^https:\/\/(www\.)?arxiv\.org\/pdf\//.test(details.url)) {
+//     chrome.tabs.update(details.tabId, {
+//       url: chrome.runtime.getURL('reader.html?url=' + encodeURIComponent(details.url))
+//     });
+//   }
+// });
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'oc-highlight') return;
   const text = info.selectionText.trim();
@@ -141,6 +152,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'oc-flush') {
     syncReadings().then(result => sendResponse(result));
+    return true;
+  }
+  if (msg.type === 'oc-fetch-pdf') {
+    // Proxy PDF fetches through the service worker which has full host_permissions
+    fetch(msg.url)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.arrayBuffer();
+      })
+      .then(buf => {
+        // Encode as base64 to send through message passing
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        // Process in chunks to avoid call stack overflow
+        const chunkSize = 32768;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        sendResponse({ data: btoa(binary) });
+      })
+      .catch(err => sendResponse({ error: err.message }));
     return true;
   }
   if (msg.type === 'oc-reset-alarm') {

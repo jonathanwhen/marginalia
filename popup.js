@@ -19,6 +19,11 @@ document.getElementById('open-dashboard').addEventListener('click', e => {
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
 });
 
+document.getElementById('open-library').addEventListener('click', e => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL('library.html') });
+});
+
 // ── Tag selection ─────────────────────────────────────────────────
 function setupTags(containerId) {
   document.querySelectorAll(`#${containerId} .tag-btn`).forEach(btn => {
@@ -93,6 +98,21 @@ async function autofill() {
   if (!tab) return;
 
   currentPageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
+
+  // Detect PDF pages and show "Open in Reader" button
+  // Disabled: text layer quality needs improvement before promoting this
+  // const isPdf = tab.url.toLowerCase().endsWith('.pdf') ||
+  //   /^https:\/\/(www\.)?arxiv\.org\/pdf\//.test(tab.url);
+  // if (isPdf) {
+  //   const readerBtn = document.getElementById('hl-open-reader');
+  //   readerBtn.style.display = 'block';
+  //   readerBtn.addEventListener('click', () => {
+  //     chrome.tabs.update(tab.id, {
+  //       url: chrome.runtime.getURL('reader.html?url=' + encodeURIComponent(tab.url))
+  //     });
+  //     window.close();
+  //   });
+  // }
 
   // Check if a reading already exists for this page
   const response = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });

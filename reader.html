@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Marginalia Reader</title>
+  <link rel="stylesheet" href="reader.css">
+</head>
+<body>
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <span class="toolbar-logo">✦</span>
+    <span class="toolbar-brand">Marginalia Reader</span>
+    <span id="toolbar-title" class="toolbar-title"></span>
+    <div class="toolbar-spacer"></div>
+    <button id="btn-upload" class="toolbar-btn" title="Upload PDF">Upload</button>
+    <input type="text" id="url-input" class="toolbar-url" placeholder="Paste PDF URL..." />
+    <button id="btn-load-url" class="toolbar-btn toolbar-btn-accent" title="Load URL">Load</button>
+    <div class="toolbar-divider"></div>
+    <button id="btn-zoom-out" class="toolbar-btn" title="Zoom out">&#8854;</button>
+    <span id="zoom-level" class="toolbar-zoom">100%</span>
+    <button id="btn-zoom-in" class="toolbar-btn" title="Zoom in">&#8853;</button>
+    <div class="toolbar-divider"></div>
+    <button id="btn-sidebar" class="toolbar-btn" title="Toggle sidebar">Notes</button>
+    <input type="file" id="file-input" accept=".pdf" style="display:none" />
+  </div>
+
+  <!-- Main content -->
+  <div id="main">
+    <!-- PDF Viewer -->
+    <div id="viewer-container">
+      <div id="viewer">
+        <!-- Welcome / empty state -->
+        <div id="empty-state">
+          <div class="empty-icon">✦</div>
+          <div class="empty-title">Marginalia PDF Reader</div>
+          <div class="empty-text">Upload a PDF or paste a URL to get started.</div>
+          <div class="empty-actions">
+            <button id="empty-upload" class="empty-btn">Upload PDF</button>
+            <span class="empty-or">or drag & drop</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div id="sidebar" class="hidden">
+      <div class="sb-header">
+        <span class="sb-label">Notes</span>
+        <button id="sb-close" class="sb-close" title="Close sidebar">✕</button>
+      </div>
+      <div class="sb-body">
+        <textarea id="sb-notes" class="sb-textarea" placeholder="Key takeaways, thoughts, or insights..."></textarea>
+        <div id="sb-status" class="sb-status"></div>
+        <div class="sb-divider"></div>
+        <div id="sb-hl-header" class="sb-hl-header">Highlights (0)</div>
+        <div id="sb-hl-list" class="sb-hl-list">
+          <div class="sb-hl-empty">No highlights yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <span id="status-text">No document loaded</span>
+  </div>
+
+  <!-- Highlight toolbar (floats over selection) -->
+  <div id="hl-toolbar" class="hidden">
+    <span>✦</span>
+    <button id="hl-btn-highlight">Highlight</button>
+    <div class="hl-divider"></div>
+    <button id="hl-btn-comment">+ Comment</button>
+  </div>
+
+  <!-- Annotation input popup -->
+  <div id="ann-popup" class="hidden">
+    <input type="text" id="ann-input" placeholder="Add a note... (Enter to save, Esc to skip)" />
+  </div>
+
+  <!-- Note bubble (click existing highlight) -->
+  <div id="note-bubble" class="hidden"></div>
+
+  <!-- Drop overlay -->
+  <div id="drop-overlay" class="hidden">
+    <div class="drop-content">Drop PDF here</div>
+  </div>
+
+  <script type="module" src="reader.js"></script>
+</body>
+</html>
