@@ -130,8 +130,9 @@ async function importSingleFile(file) {
   // Dedup check
   if (await hasTranscript(pageKey)) return 'duplicate';
 
-  // Load PDF doc to get page count + extract plain text for search
-  const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  // Load PDF doc to get page count + extract plain text for search.
+  // Pass a copy because getDocument() transfers the ArrayBuffer, detaching the original.
+  const doc = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
   const { plainText, wordCount } = await extractPlainText(doc);
 
   // Derive title from filename: strip extension, replace separators
