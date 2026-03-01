@@ -168,7 +168,9 @@ async function importSingleFile(file) {
 
 // ── Text extraction ──────────────────────────────────────────────────
 // Extracts text from all pages and builds clean HTML paragraphs.
-// Groups text items by Y-coordinate changes to detect paragraph breaks.
+// Merges lines within a paragraph by comparing the Y gap against the
+// font height: a normal line break is ~1x the font height, while a
+// paragraph break has a noticeably larger gap (>1.4x font height).
 async function extractTextAsHtml(doc) {
   const paragraphs = [];
   let totalWords = 0;
@@ -179,26 +181,46 @@ async function extractTextAsHtml(doc) {
 
     let currentParagraph = '';
     let lastY = null;
+    let lastHeight = 12; // default font height fallback
 
     for (const item of textContent.items) {
       if (!item.str) continue;
-      const y = Math.round(item.transform[5]); // Y position
+      const y = item.transform[5]; // Y position (PDF coords: increases upward)
+      const height = item.height || lastHeight;
 
-      if (lastY !== null && Math.abs(y - lastY) > 5) {
-        // Y changed significantly — paragraph break
-        if (currentParagraph.trim()) {
-          paragraphs.push(currentParagraph.trim());
-          totalWords += currentParagraph.trim().split(/\s+/).filter(w => w.length > 0).length;
+      if (lastY !== null) {
+        const yGap = Math.abs(y - lastY);
+
+        if (yGap < 1) {
+          // Same line — just append
+          if (currentParagraph && !currentParagraph.endsWith(' ') && !item.str.startsWith(' ')) {
+            currentParagraph += ' ';
+          }
+          currentParagraph += item.str;
+        } else if (yGap > height * 1.4) {
+          // Gap is larger than normal line spacing — paragraph break
+          if (currentParagraph.trim()) {
+            paragraphs.push(currentParagraph.trim());
+            totalWords += currentParagraph.trim().split(/\s+/).filter(w => w.length > 0).length;
+          }
+          currentParagraph = item.str;
+        } else {
+          // Normal line break within paragraph — merge with space
+          if (currentParagraph && !currentParagraph.endsWith(' ') && !currentParagraph.endsWith('-')) {
+            currentParagraph += ' ';
+          }
+          // Handle hyphenated words split across lines
+          if (currentParagraph.endsWith('-')) {
+            currentParagraph = currentParagraph.slice(0, -1);
+          }
+          currentParagraph += item.str;
         }
-        currentParagraph = item.str;
       } else {
-        // Same line or very close — append with space if needed
-        if (currentParagraph && !currentParagraph.endsWith(' ') && !item.str.startsWith(' ')) {
-          currentParagraph += ' ';
-        }
-        currentParagraph += item.str;
+        currentParagraph = item.str;
       }
+
       lastY = y;
+      lastHeight = height;
     }
 
     // Flush last paragraph of page
