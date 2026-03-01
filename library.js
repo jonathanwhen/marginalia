@@ -34,7 +34,6 @@ const tagFilters = document.getElementById('tag-filters');
 const sortSelect = document.getElementById('sort-select');
 const grid = document.getElementById('transcript-grid');
 const countEl = document.getElementById('lib-count');
-const deleteAllBtn = document.getElementById('btn-delete-all');
 
 // ── Import: file/folder selection ────────────────────────────────────
 document.getElementById('btn-files').addEventListener('click', (e) => {
@@ -320,7 +319,6 @@ async function loadTranscripts() {
 
   countEl.textContent = `${allTranscripts.length} transcript${allTranscripts.length !== 1 ? 's' : ''}`;
   toolbar.style.display = allTranscripts.length > 0 ? 'flex' : 'none';
-  deleteAllBtn.classList.toggle('hidden', allTranscripts.length === 0);
 
   renderTagFilters();
   renderGrid();
@@ -443,7 +441,7 @@ function renderGrid() {
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ''}
       <div class="card-preview">${escHtml(preview)}</div>
       <div class="card-actions">
-        <button class="card-delete" data-key="${escAttr(t.pageKey)}" title="Delete">&times;</button>
+        <button class="card-delete" data-key="${escAttr(t.pageKey)}">Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -496,45 +494,6 @@ async function deleteLibraryItem(pageKey) {
 
   await loadTranscripts();
 }
-
-// ── Delete all ───────────────────────────────────────────────────────
-let deleteAllConfirm = false;
-deleteAllBtn.addEventListener('click', async () => {
-  if (!deleteAllConfirm) {
-    deleteAllConfirm = true;
-    deleteAllBtn.textContent = 'Click again to confirm';
-    deleteAllBtn.classList.add('confirm');
-    setTimeout(() => {
-      if (deleteAllConfirm) {
-        deleteAllConfirm = false;
-        deleteAllBtn.textContent = 'Delete All';
-        deleteAllBtn.classList.remove('confirm');
-      }
-    }, 3000);
-    return;
-  }
-  deleteAllConfirm = false;
-  deleteAllBtn.textContent = 'Deleting...';
-  deleteAllBtn.disabled = true;
-
-  // Batch delete: remove all transcripts from IndexedDB and chrome.storage.local
-  const keys = allTranscripts.map(t => t.pageKey);
-  for (const key of keys) {
-    await deleteTranscript(key);
-  }
-  // Remove all from ocReadings and highlights
-  const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
-  for (const key of keys) {
-    delete ocReadings[key];
-  }
-  await chrome.storage.local.set({ ocReadings });
-  if (keys.length) await chrome.storage.local.remove(keys);
-
-  deleteAllBtn.textContent = 'Delete All';
-  deleteAllBtn.disabled = false;
-  deleteAllBtn.classList.remove('confirm');
-  await loadTranscripts();
-});
 
 // ── Search (debounced) ───────────────────────────────────────────────
 let searchTimer = null;
