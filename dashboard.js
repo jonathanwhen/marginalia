@@ -7,12 +7,13 @@ function esc(str) {
 
 // ── Tag color palette ────────────────────────────────────────────
 const TAG_COLORS = {
-  'AI/ML Research':         '#e8a87c',
-  'Healthcare/Bio':         '#6fcf97',
-  'General Learning':       '#7ca8e8',
-  'Framework/Mental Model': '#b87ce8',
-  'Future Exploration':     '#e8d47c',
-  'To Revisit':             '#e87c7c'
+  'AI/ML Research':     '#e8a87c',
+  'Healthcare/Bio':     '#6fcf97',
+  'Philosophy':         '#b87ce8',
+  'Economics/Finance':  '#e8d47c',
+  'Research Craft':     '#7cc8e8',
+  'General Learning':   '#7ca8e8',
+  'To Revisit':         '#e87c7c'
 };
 
 function getTagColor(tag) {

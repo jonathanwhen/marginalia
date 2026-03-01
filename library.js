@@ -1,16 +1,18 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
 import { getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript } from './lib/db.js';
+import { classifyReading } from './lib/classify.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
 
 // ── Tag colors (matches dashboard.js) ────────────────────────────────
 const TAG_COLORS = {
-  'AI/ML Research':         '#e8a87c',
-  'Healthcare/Bio':         '#6fcf97',
-  'General Learning':       '#7ca8e8',
-  'Framework/Mental Model': '#b87ce8',
-  'Future Exploration':     '#e8d47c',
-  'To Revisit':             '#e87c7c'
+  'AI/ML Research':     '#e8a87c',
+  'Healthcare/Bio':     '#6fcf97',
+  'Philosophy':         '#b87ce8',
+  'Economics/Finance':  '#e8d47c',
+  'Research Craft':     '#7cc8e8',
+  'General Learning':   '#7ca8e8',
+  'To Revisit':         '#e87c7c'
 };
 function getTagColor(tag) { return TAG_COLORS[tag] || '#888'; }
 
@@ -138,6 +140,9 @@ async function importSingleFile(file) {
     .replace(/[-_]+/g, ' ')
     .trim();
 
+  // Auto-classify based on filename + content
+  const autoTag = classifyReading(title, file.name, plainText);
+
   const transcript = {
     pageKey,
     title,
@@ -150,7 +155,7 @@ async function importSingleFile(file) {
     pageCount: doc.numPages,
     wordCount,
     importedAt: new Date().toISOString(),
-    tags: [],
+    tags: [autoTag],
     format: 'pdf'
   };
 
@@ -162,6 +167,7 @@ async function importSingleFile(file) {
     pageKey,
     title,
     url: pageKey,
+    tags: [autoTag],
     estPages: doc.numPages
   });
 

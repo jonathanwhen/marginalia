@@ -1,3 +1,5 @@
+import { classifyReading } from './lib/classify.js';
+
 const ALARM_NAME = 'oc-flush';
 const DAILY_ALARM = 'oc-daily-summary';
 const DEFAULT_FLUSH_INTERVAL = 60; // minutes
@@ -12,6 +14,7 @@ chrome.runtime.onInstalled.addListener(() => {
   });
   migrateReadingLog();
   migrateDirtyToSyncedAt();
+  classifyUntaggedReadings();
   setupFlushAlarm();
   setupDailySummaryAlarm();
   updateBadge();
@@ -130,6 +133,24 @@ async function migrateDirtyToSyncedAt() {
   await chrome.storage.local.remove('ocOutbox');
 }
 
+// ── Retroactive auto-classification ─────────────────────────────────
+// Classifies any existing readings that have no tags. Runs once on
+// install/update. Non-destructive: only fills in empty tag arrays.
+async function classifyUntaggedReadings() {
+  const readings = await getReadings();
+  let changed = false;
+  for (const [pageKey, reading] of Object.entries(readings)) {
+    if (!reading.tags || reading.tags.length === 0) {
+      const tag = classifyReading(reading.title || '', reading.url || pageKey, '');
+      reading.tags = [tag];
+      reading.updatedAt = new Date().toISOString();
+      reading.syncedAt = null; // mark for re-sync so tags propagate to GitHub
+      changed = true;
+    }
+  }
+  if (changed) await saveReadings(readings);
+}
+
 // ── Message router ──────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'oc-upsert-reading') {
@@ -197,16 +218,23 @@ async function estimatePages(tabId) {
 }
 
 // ── Upsert a reading entry ──────────────────────────────────────────
-async function upsertReading({ pageKey, title, author, url, tags, notes, estPages }) {
+async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content }) {
   const readings = await getReadings();
   const now = new Date().toISOString();
   const existing = readings[pageKey];
+
+  // Auto-classify new readings that have no tags
+  const resolvedTags = tags ?? existing?.tags ?? [];
+  if (!existing && resolvedTags.length === 0) {
+    const autoTag = classifyReading(title || '', url || pageKey, content || '');
+    resolvedTags.push(autoTag);
+  }
 
   readings[pageKey] = {
     title: title ?? existing?.title ?? '',
     author: author ?? existing?.author ?? '',
     url: url ?? existing?.url ?? pageKey,
-    tags: tags ?? existing?.tags ?? [],
+    tags: resolvedTags,
     notes: notes ?? existing?.notes ?? '',
     estPages: estPages ?? existing?.estPages ?? 0,
     createdAt: existing?.createdAt ?? now,
