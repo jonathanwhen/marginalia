@@ -4,7 +4,8 @@
   <meta charset="utf-8">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
-    body { max-width: 480px; margin: 40px auto; padding: 0 20px; background: #0a0a0a; color: #e0e0e0; }
+    body { background: #0a0a0a; color: #e0e0e0; }
+    .settings-content { max-width: 480px; margin: 0 auto; padding: 40px 20px; }
     h1 { font-size: 18px; margin-bottom: 24px; display: flex; align-items: center; gap: 8px; }
     .field { margin-bottom: 18px; }
     label { display: block; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
@@ -13,10 +14,38 @@
     button { background: #e8a87c; color: #0a0a0a; border: none; border-radius: 6px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .saved { color: #6fcf97; font-size: 12px; margin-left: 12px; display: none; }
     .hint { font-size: 11px; color: #444; margin-top: 4px; }
+
+    /* ── Nav ── */
+    .page-nav {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 32px; border-bottom: 1px solid #1e1e1e;
+      background: #0a0a0a; position: sticky; top: 0; z-index: 50;
+    }
+    .page-nav .nav-brand {
+      font-size: 16px; margin-right: 12px; text-decoration: none; display: flex; align-items: center; gap: 8px;
+    }
+    .page-nav .nav-brand-icon { font-size: 16px; }
+    .page-nav .nav-brand-text { font-size: 13px; font-weight: 700; color: #fff; }
+    .page-nav a {
+      font-size: 12px; color: #555; text-decoration: none;
+      padding: 5px 12px; border-radius: 5px; transition: all 0.15s;
+      font-weight: 500;
+    }
+    .page-nav a:hover { color: #e0e0e0; background: #161616; }
+    .page-nav a.active { color: #e8a87c; background: rgba(232, 168, 124, 0.15); }
+    .page-nav .nav-spacer { flex: 1; }
   </style>
 </head>
 <body>
-  <h1>✦ Marginalia Settings</h1>
+  <nav class="page-nav">
+    <span class="nav-brand"><span class="nav-brand-icon">✦</span><span class="nav-brand-text">Marginalia</span></span>
+    <a href="dashboard.html">Reading Log</a>
+    <a href="library.html">Library</a>
+    <span class="nav-spacer"></span>
+    <a href="options.html" class="active">Settings</a>
+  </nav>
+  <div class="settings-content">
+  <h1>Settings</h1>
 
   <div class="field">
     <label>Telegram Bot Token</label>
@@ -77,6 +106,7 @@
     <div class="saved" id="restore-msg" style="margin-top:8px;"></div>
   </div>
 
+  </div>
   <script src="options.js"></script>
 </body>
 </html>
