@@ -71,16 +71,30 @@
     .stat-card {
       background: linear-gradient(135deg, rgba(232, 168, 124, 0.04), transparent 60%);
       border: 1px solid var(--border); border-radius: var(--radius);
-      padding: 20px; transition: border-color 0.2s;
+      padding: 20px; transition: border-color 0.2s, box-shadow 0.2s;
+      position: relative; overflow: hidden;
     }
-    .stat-card:hover { border-color: var(--border-2); }
+    .stat-card:hover { border-color: var(--border-2); box-shadow: 0 4px 24px rgba(0,0,0,0.2); }
     .stat-value {
       font-size: 32px; font-weight: 700; color: #fff;
       letter-spacing: -0.03em; line-height: 1; margin-bottom: 6px;
+      position: relative; z-index: 1;
     }
     .stat-label {
       font-size: 11px; color: var(--text-3);
       text-transform: uppercase; letter-spacing: 0.08em;
+      position: relative; z-index: 1; display: flex; align-items: center; gap: 6px;
+    }
+    .stat-trend {
+      font-size: 10px; font-weight: 600; letter-spacing: 0;
+      text-transform: none;
+    }
+    .stat-trend.up { color: var(--green); }
+    .stat-trend.down { color: var(--red); }
+    .stat-trend.flat { color: var(--text-4); }
+    .sparkline {
+      position: absolute; bottom: 0; right: 0;
+      width: 55%; height: 55%; pointer-events: none;
     }
 
     /* ── Section Titles ── */
@@ -189,9 +203,17 @@
     tbody tr.row td:first-child {
       border-left: 3px solid var(--row-accent, transparent);
     }
-    .col-title {
-      width: 30%; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; color: #fff; font-weight: 500;
+    .col-title { width: 30%; color: #fff; font-weight: 500; }
+    .col-title .title-text {
+      display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .row-progress {
+      height: 2px; background: var(--surface-2); border-radius: 1px;
+      margin-top: 5px; width: 100%;
+    }
+    .row-progress-fill {
+      height: 100%; border-radius: 1px; transition: width 0.3s ease;
+      background: linear-gradient(90deg, var(--accent), rgba(232, 168, 124, 0.4));
     }
     .col-author {
       width: 15%; overflow: hidden; text-overflow: ellipsis;

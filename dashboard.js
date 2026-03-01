@@ -53,10 +53,23 @@ async function loadReadings() {
     return { pageKey, ...r, hlCount };
   });
 
+  // Load reading positions for progress bars
+  if (allReadings.length) {
+    const posKeys = allReadings.map(r => `pos:${r.pageKey}`);
+    const posData = await chrome.storage.local.get(posKeys);
+    for (const r of allReadings) {
+      const pos = posData[`pos:${r.pageKey}`];
+      if (pos && r.estPages) {
+        r.progress = Math.min(pos.scrollFraction || 0, 1);
+      }
+    }
+  }
+
   document.getElementById('total-count').textContent =
     `${allReadings.length} reading${allReadings.length !== 1 ? 's' : ''}`;
 
-  renderStats(computeStats(allReadings));
+  const dailyData = computeDailyData(allReadings);
+  renderStats(computeStats(allReadings), dailyData);
   renderHeatmap(allReadings);
   renderTagFilters(allReadings);
   renderTable(getFilteredReadings());
@@ -75,7 +88,60 @@ function computeStats(readings) {
     .filter(r => r.createdAt && new Date(r.createdAt) >= weekAgo)
     .reduce((sum, r) => sum + (r.estPages || 0), 0);
 
-  return { totalPages, totalReadings, streak, weekPages };
+  // Previous week for trend comparison
+  const twoWeeksAgo = new Date();
+  twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+  twoWeeksAgo.setHours(0, 0, 0, 0);
+  const lastWeekPages = readings
+    .filter(r => r.createdAt && new Date(r.createdAt) >= twoWeeksAgo && new Date(r.createdAt) < weekAgo)
+    .reduce((sum, r) => sum + (r.estPages || 0), 0);
+  const weekTrend = lastWeekPages > 0
+    ? Math.round(((weekPages - lastWeekPages) / lastWeekPages) * 100)
+    : (weekPages > 0 ? 100 : 0);
+
+  return { totalPages, totalReadings, streak, weekPages, weekTrend };
+}
+
+// ── Daily data for sparklines ─────────────────────────────────────
+function computeDailyData(readings) {
+  const days = 7;
+  const dailyPages = new Array(days).fill(0);
+  const dailyReadings = new Array(days).fill(0);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (const r of readings) {
+    if (!r.createdAt) continue;
+    const d = new Date(r.createdAt);
+    d.setHours(0, 0, 0, 0);
+    const daysAgo = Math.floor((today - d) / (1000 * 60 * 60 * 24));
+    if (daysAgo >= 0 && daysAgo < days) {
+      const index = days - 1 - daysAgo;
+      dailyPages[index] += r.estPages || 0;
+      dailyReadings[index] += 1;
+    }
+  }
+
+  return { dailyPages, dailyReadings };
+}
+
+// ── Sparkline SVG generation ──────────────────────────────────────
+function sparklineSvg(data) {
+  if (!data.length || data.every(v => v === 0)) return '';
+  const max = Math.max(...data, 1);
+  const w = 80, h = 28;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - (v / max) * (h - 4) - 2;
+    return `${x},${y}`;
+  });
+  const line = pts.join(' ');
+  const area = `0,${h} ${line} ${w},${h}`;
+  return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <polygon points="${area}" fill="rgba(232,168,124,0.06)" />
+    <polyline points="${line}" fill="none" stroke="rgba(232,168,124,0.35)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`;
 }
 
 function computeStreak(readings) {
@@ -101,19 +167,29 @@ function computeStreak(readings) {
   return streak;
 }
 
-function renderStats(stats) {
+function renderStats(stats, dailyData) {
   const grid = document.getElementById('stats-grid');
+
+  // Week-over-week trend indicator
+  let trendHtml = '';
+  if (stats.weekPages > 0 || stats.weekTrend !== 0) {
+    const arrow = stats.weekTrend > 0 ? '↑' : stats.weekTrend < 0 ? '↓' : '→';
+    const cls = stats.weekTrend > 0 ? 'up' : stats.weekTrend < 0 ? 'down' : 'flat';
+    trendHtml = `<span class="stat-trend ${cls}">${arrow} ${Math.abs(stats.weekTrend)}%</span>`;
+  }
+
   const items = [
-    { value: stats.totalPages, label: 'Pages Read' },
-    { value: stats.totalReadings, label: 'Readings' },
+    { value: stats.totalPages, label: 'Pages Read', spark: sparklineSvg(dailyData.dailyPages) },
+    { value: stats.totalReadings, label: 'Readings', spark: sparklineSvg(dailyData.dailyReadings) },
     { value: stats.streak, label: 'Day Streak' },
-    { value: stats.weekPages, label: 'Pages This Week' },
+    { value: stats.weekPages, label: 'Pages This Week', extra: trendHtml },
   ];
 
   grid.innerHTML = items.map(item => `
     <div class="stat-card animate-in">
       <div class="stat-value" data-target="${item.value}">0</div>
-      <div class="stat-label">${item.label}</div>
+      <div class="stat-label">${item.label}${item.extra || ''}</div>
+      ${item.spark || ''}
     </div>
   `).join('');
 
@@ -308,8 +384,12 @@ function renderTable(readings) {
     const isLibrary = r.pageKey.startsWith('library:');
     const titlePrefix = isLibrary ? '📄 ' : '';
 
+    const progressHtml = r.progress != null
+      ? `<div class="row-progress"><div class="row-progress-fill" style="width:${Math.round(r.progress * 100)}%"></div></div>`
+      : '';
+
     html += `<tr class="row" data-pk="${esc(r.pageKey)}" style="--row-accent:${color}">
-      <td class="col-title" title="${esc(r.title)}">${titlePrefix}${esc(r.title || '(untitled)')}</td>
+      <td class="col-title" title="${esc(r.title)}"><span class="title-text">${titlePrefix}${esc(r.title || '(untitled)')}</span>${progressHtml}</td>
       <td class="col-author">${esc(r.author || '\u2014')}</td>
       <td class="col-tags">${tagsHtml || '<span style="color:var(--text-4)">\u2014</span>'}</td>
       <td class="col-pages">${r.estPages || '\u2014'}</td>
