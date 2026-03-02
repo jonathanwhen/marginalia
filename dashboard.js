@@ -585,7 +585,8 @@ async function deleteReading(pageKey) {
   document.getElementById('total-count').textContent =
     `${allReadings.length} reading${allReadings.length !== 1 ? 's' : ''}`;
 
-  renderStats(computeStats(allReadings));
+  const dailyData = computeDailyData(allReadings);
+  renderStats(computeStats(allReadings), dailyData);
   renderHeatmap(allReadings);
   renderTagFilters(allReadings);
   renderTable(getFilteredReadings());
