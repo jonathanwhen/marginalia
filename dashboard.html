@@ -295,6 +295,61 @@
     .delete-btn:hover { background: rgba(235, 87, 87, 0.15); border-color: var(--red); }
     .delete-btn.confirm { background: rgba(235, 87, 87, 0.2); border-color: var(--red); }
 
+    /* ── Reading Progress ── */
+    .reading-progress {
+      margin-bottom: 20px; padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .rp-summary {
+      font-size: 12px; color: var(--text-2); margin-bottom: 12px;
+    }
+    .rp-bar {
+      height: 4px; background: var(--surface-2); border-radius: 2px;
+      margin-top: 6px; overflow: hidden;
+    }
+    .rp-bar-fill {
+      height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, var(--accent), rgba(232, 168, 124, 0.5));
+      transition: width 0.3s ease;
+    }
+    .rp-form {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+    }
+    .rp-form input {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+      color: var(--text); font-size: 12px; padding: 6px 10px;
+      font-family: var(--font); outline: none; transition: border 0.15s;
+    }
+    .rp-form input:focus { border-color: var(--accent); }
+    .rp-date { width: 140px; }
+    .rp-pages { width: 80px; }
+    .rp-log-btn {
+      background: var(--accent-dim); border: 1px solid rgba(232, 168, 124, 0.3);
+      border-radius: 5px; color: var(--accent); font-size: 12px;
+      padding: 6px 14px; cursor: pointer; font-weight: 600;
+      font-family: var(--font); transition: all 0.15s;
+    }
+    .rp-log-btn:hover { background: rgba(232, 168, 124, 0.25); border-color: var(--accent); }
+    .rp-entries {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      max-height: 120px; overflow-y: auto;
+    }
+    .rp-entry {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 5px;
+      padding: 4px 8px; font-size: 11px; cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .rp-entry:hover { border-color: var(--border-2); }
+    .rp-entry-date { color: var(--text-3); }
+    .rp-entry-pages { color: var(--accent); font-weight: 600; }
+    .rp-entry-del {
+      background: none; border: none; color: var(--text-4);
+      cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+      transition: color 0.15s;
+    }
+    .rp-entry-del:hover { color: var(--red); }
+
     /* ── Empty State ── */
     .empty-state { text-align: center; padding: 80px 20px; color: var(--text-4); }
     .empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; }

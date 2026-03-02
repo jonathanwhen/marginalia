@@ -167,6 +167,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     handleHighlightChanged(msg, _sender.tab).then(() => sendResponse({ ok: true }));
     return true;
   }
+  if (msg.type === 'oc-log-pages') {
+    logPages(msg.pageKey, msg.date, msg.pages).then(result => sendResponse(result));
+    return true;
+  }
   if (msg.type === 'oc-get-today-pages') {
     getTodayPages().then(result => sendResponse(result));
     return true;
@@ -239,7 +243,8 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
     estPages: estPages ?? existing?.estPages ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    syncedAt: existing?.syncedAt ?? null
+    syncedAt: existing?.syncedAt ?? null,
+    ...(existing?.readingLog ? { readingLog: existing.readingLog } : {})
   };
 
   await saveReadings(readings);
@@ -262,6 +267,27 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
   await touchReading(pageKey);
 }
 
+// ── Log pages read on a specific date ────────────────────────────────
+async function logPages(pageKey, date, pages) {
+  const readings = await getReadings();
+  const reading = readings[pageKey];
+  if (!reading) return { error: 'Reading not found' };
+
+  if (!reading.readingLog) reading.readingLog = {};
+
+  if (pages <= 0) {
+    delete reading.readingLog[date];
+    // Remove empty readingLog object
+    if (Object.keys(reading.readingLog).length === 0) delete reading.readingLog;
+  } else {
+    reading.readingLog[date] = pages;
+  }
+
+  await saveReadings(readings);
+  await touchReading(pageKey);
+  return { ok: true };
+}
+
 // ── Today's page count ──────────────────────────────────────────────
 // Uses local date (not UTC) so the day boundary aligns with the user's timezone
 async function getTodayPages() {
@@ -271,13 +297,21 @@ async function getTodayPages() {
   let pages = 0;
   let count = 0;
   for (const r of Object.values(readings)) {
-    if (!r.createdAt) continue;
-    // Convert stored UTC createdAt to local date string for comparison
-    const local = new Date(r.createdAt);
-    const localStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
-    if (localStr === todayStr) {
-      pages += r.estPages || 0;
-      count++;
+    if (r.readingLog) {
+      // Use readingLog entry for today if present
+      if (r.readingLog[todayStr]) {
+        pages += r.readingLog[todayStr];
+        count++;
+      }
+    } else {
+      if (!r.createdAt) continue;
+      // Convert stored UTC createdAt to local date string for comparison
+      const local = new Date(r.createdAt);
+      const localStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+      if (localStr === todayStr) {
+        pages += r.estPages || 0;
+        count++;
+      }
     }
   }
   return { pages, count };
@@ -423,7 +457,8 @@ async function syncReadings() {
         estPages: reading.estPages,
         createdAt: reading.createdAt,
         updatedAt: reading.updatedAt,
-        highlights: allHighlights[key] || []
+        highlights: allHighlights[key] || [],
+        ...(reading.readingLog ? { readingLog: reading.readingLog } : {})
       };
     }
 
@@ -531,7 +566,8 @@ async function restoreFromGitHub() {
           estPages: entry.estPages || 0,
           createdAt: entry.createdAt || now,
           updatedAt: entry.updatedAt || now,
-          syncedAt: entry.updatedAt || now  // Mark as synced (came from GitHub)
+          syncedAt: entry.updatedAt || now,  // Mark as synced (came from GitHub)
+          ...(entry.readingLog ? { readingLog: entry.readingLog } : {})
         };
         restored++;
       }

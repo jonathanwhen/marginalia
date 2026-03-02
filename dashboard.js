@@ -78,24 +78,37 @@ async function loadReadings() {
 
 // ── Stats ────────────────────────────────────────────────────────
 function computeStats(readings) {
-  const totalPages = readings.reduce((sum, r) => sum + (r.estPages || 0), 0);
+  let totalPages = 0;
   const totalReadings = readings.length;
   const streak = computeStreak(readings);
 
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
   weekAgo.setHours(0, 0, 0, 0);
-  const weekPages = readings
-    .filter(r => r.createdAt && new Date(r.createdAt) >= weekAgo)
-    .reduce((sum, r) => sum + (r.estPages || 0), 0);
+  const weekAgoStr = localDateStr(weekAgo);
 
-  // Previous week for trend comparison
   const twoWeeksAgo = new Date();
   twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
   twoWeeksAgo.setHours(0, 0, 0, 0);
-  const lastWeekPages = readings
-    .filter(r => r.createdAt && new Date(r.createdAt) >= twoWeeksAgo && new Date(r.createdAt) < weekAgo)
-    .reduce((sum, r) => sum + (r.estPages || 0), 0);
+  const twoWeeksAgoStr = localDateStr(twoWeeksAgo);
+
+  let weekPages = 0;
+  let lastWeekPages = 0;
+
+  for (const r of readings) {
+    if (r.readingLog && Object.keys(r.readingLog).length > 0) {
+      for (const [date, pages] of Object.entries(r.readingLog)) {
+        totalPages += pages;
+        if (date >= weekAgoStr) weekPages += pages;
+        else if (date >= twoWeeksAgoStr) lastWeekPages += pages;
+      }
+    } else {
+      totalPages += r.estPages || 0;
+      if (r.createdAt && new Date(r.createdAt) >= weekAgo) weekPages += r.estPages || 0;
+      else if (r.createdAt && new Date(r.createdAt) >= twoWeeksAgo) lastWeekPages += r.estPages || 0;
+    }
+  }
+
   const weekTrend = lastWeekPages > 0
     ? Math.round(((weekPages - lastWeekPages) / lastWeekPages) * 100)
     : (weekPages > 0 ? 100 : 0);
@@ -113,14 +126,27 @@ function computeDailyData(readings) {
   today.setHours(0, 0, 0, 0);
 
   for (const r of readings) {
-    if (!r.createdAt) continue;
-    const d = new Date(r.createdAt);
-    d.setHours(0, 0, 0, 0);
-    const daysAgo = Math.floor((today - d) / (1000 * 60 * 60 * 24));
-    if (daysAgo >= 0 && daysAgo < days) {
-      const index = days - 1 - daysAgo;
-      dailyPages[index] += r.estPages || 0;
-      dailyReadings[index] += 1;
+    if (r.readingLog && Object.keys(r.readingLog).length > 0) {
+      // Distribute pages from readingLog across their respective days
+      for (const [dateStr, pages] of Object.entries(r.readingLog)) {
+        const d = new Date(dateStr + 'T00:00:00');
+        const daysAgo = Math.floor((today - d) / (1000 * 60 * 60 * 24));
+        if (daysAgo >= 0 && daysAgo < days) {
+          const index = days - 1 - daysAgo;
+          dailyPages[index] += pages;
+          dailyReadings[index] += 1;
+        }
+      }
+    } else {
+      if (!r.createdAt) continue;
+      const d = new Date(r.createdAt);
+      d.setHours(0, 0, 0, 0);
+      const daysAgo = Math.floor((today - d) / (1000 * 60 * 60 * 24));
+      if (daysAgo >= 0 && daysAgo < days) {
+        const index = days - 1 - daysAgo;
+        dailyPages[index] += r.estPages || 0;
+        dailyReadings[index] += 1;
+      }
     }
   }
 
@@ -148,6 +174,9 @@ function sparklineSvg(data) {
 function computeStreak(readings) {
   const days = new Set();
   for (const r of readings) {
+    if (r.readingLog) {
+      for (const date of Object.keys(r.readingLog)) days.add(date);
+    }
     if (r.createdAt) days.add(localDateStr(new Date(r.createdAt)));
   }
 
@@ -220,9 +249,15 @@ function renderHeatmap(readings) {
   // Build day -> pages map using local dates
   const dayPages = {};
   for (const r of readings) {
-    if (!r.createdAt) continue;
-    const key = localDateStr(new Date(r.createdAt));
-    dayPages[key] = (dayPages[key] || 0) + (r.estPages || 0);
+    if (r.readingLog && Object.keys(r.readingLog).length > 0) {
+      for (const [date, pages] of Object.entries(r.readingLog)) {
+        dayPages[date] = (dayPages[date] || 0) + pages;
+      }
+    } else {
+      if (!r.createdAt) continue;
+      const key = localDateStr(new Date(r.createdAt));
+      dayPages[key] = (dayPages[key] || 0) + (r.estPages || 0);
+    }
   }
 
   // Align start to Monday, WEEKS weeks ago
@@ -530,8 +565,46 @@ async function toggleDetail(tr, detailTr, reading) {
     ? `<a href="${chrome.runtime.getURL('library-reader.html?key=' + encodeURIComponent(reading.pageKey))}" target="_blank" style="background:rgba(111,207,151,0.12);border:1px solid rgba(111,207,151,0.4);border-radius:5px;color:#6fcf97;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;text-decoration:none;display:inline-block;">Open in Reader</a>`
     : '';
 
+  // Reading progress section (for manually tracking pages read per day)
+  const log = reading.readingLog || {};
+  const logEntries = Object.entries(log).sort((a, b) => b[0].localeCompare(a[0]));
+  const loggedTotal = logEntries.reduce((s, [, p]) => s + p, 0);
+  const todayStr = localDateStr(new Date());
+
+  let progressHtml = `<div class="reading-progress">
+    <h4 class="detail-section-title">Reading Progress</h4>`;
+
+  if (reading.estPages) {
+    const pct = Math.min(Math.round((loggedTotal / reading.estPages) * 100), 100);
+    progressHtml += `<div class="rp-summary">${loggedTotal} / ${reading.estPages} pages
+      <div class="rp-bar"><div class="rp-bar-fill" style="width:${pct}%"></div></div></div>`;
+  } else if (loggedTotal > 0) {
+    progressHtml += `<div class="rp-summary">${loggedTotal} pages logged</div>`;
+  }
+
+  progressHtml += `<div class="rp-form">
+    <input type="date" class="rp-date" value="${todayStr}" />
+    <input type="number" class="rp-pages" min="0" placeholder="Pages" />
+    <button class="rp-log-btn">Log</button>
+  </div>`;
+
+  if (logEntries.length) {
+    progressHtml += '<div class="rp-entries">';
+    for (const [date, pages] of logEntries) {
+      progressHtml += `<div class="rp-entry" data-date="${esc(date)}">
+        <span class="rp-entry-date">${date}</span>
+        <span class="rp-entry-pages">${pages} pg</span>
+        <button class="rp-entry-del" data-date="${esc(date)}">&times;</button>
+      </div>`;
+    }
+    progressHtml += '</div>';
+  }
+
+  progressHtml += '</div>';
+
   container.innerHTML = `<div class="detail-panel">
     <div style="display:flex;justify-content:flex-start;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #1e1e1e;">${openReaderBtnHtml}${deleteBtnHtml}</div>
+    ${progressHtml}
     <div class="detail-grid">${metaHtml}${hlHtml}</div>
   </div>`;
 
@@ -554,6 +627,50 @@ async function toggleDetail(tr, detailTr, reading) {
       return;
     }
     await deleteReading(reading.pageKey);
+  });
+
+  // Reading progress: log button
+  const rpLogBtn = container.querySelector('.rp-log-btn');
+  if (rpLogBtn) {
+    rpLogBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const dateInput = container.querySelector('.rp-date');
+      const pagesInput = container.querySelector('.rp-pages');
+      const date = dateInput.value;
+      const pages = parseInt(pagesInput.value, 10);
+      if (!date || isNaN(pages) || pages < 0) return;
+      await chrome.runtime.sendMessage({ type: 'oc-log-pages', pageKey: reading.pageKey, date, pages });
+      await loadReadings();
+      // Re-open detail panel
+      const newTr = document.querySelector(`tr.row[data-pk="${CSS.escape(reading.pageKey)}"]`);
+      const newDetailTr = document.querySelector(`tr.detail-row[data-detail-pk="${CSS.escape(reading.pageKey)}"]`);
+      const updated = allReadings.find(r => r.pageKey === reading.pageKey);
+      if (newTr && newDetailTr && updated) toggleDetail(newTr, newDetailTr, updated);
+    });
+  }
+
+  // Reading progress: click entry to edit, delete button to remove
+  container.querySelectorAll('.rp-entry').forEach(entry => {
+    entry.addEventListener('click', (e) => {
+      if (e.target.classList.contains('rp-entry-del')) return;
+      e.stopPropagation();
+      const date = entry.dataset.date;
+      const log = reading.readingLog || {};
+      container.querySelector('.rp-date').value = date;
+      container.querySelector('.rp-pages').value = log[date] || '';
+      container.querySelector('.rp-pages').focus();
+    });
+  });
+  container.querySelectorAll('.rp-entry-del').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await chrome.runtime.sendMessage({ type: 'oc-log-pages', pageKey: reading.pageKey, date: btn.dataset.date, pages: 0 });
+      await loadReadings();
+      const newTr = document.querySelector(`tr.row[data-pk="${CSS.escape(reading.pageKey)}"]`);
+      const newDetailTr = document.querySelector(`tr.detail-row[data-detail-pk="${CSS.escape(reading.pageKey)}"]`);
+      const updated = allReadings.find(r => r.pageKey === reading.pageKey);
+      if (newTr && newDetailTr && updated) toggleDetail(newTr, newDetailTr, updated);
+    });
   });
 
   detailTr.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
