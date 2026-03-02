@@ -27,6 +27,11 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── Nav ── */
 .page-nav {
   display: flex; align-items: center; gap: 6px;
@@ -172,6 +177,10 @@ html, body {
 .page-container .textLayer span,
 .page-container .textLayer br {
   color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
   pointer-events: all;
 }
 .page-container .textLayer ::selection {

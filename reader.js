@@ -373,7 +373,18 @@ async function loadHighlights() {
   if (!currentPageKey || !isContextValid()) { highlights = []; return; }
   try {
     const result = await chrome.storage.local.get([currentPageKey]);
-    highlights = result[currentPageKey] || [];
+    const stored = result[currentPageKey];
+    if (Array.isArray(stored)) {
+      highlights = stored.filter(h =>
+        h && typeof h.id === 'string' && typeof h.text === 'string' &&
+        typeof h.pageIndex === 'number'
+      );
+      if (highlights.length < stored.length) {
+        await chrome.storage.local.set({ [currentPageKey]: highlights });
+      }
+    } else {
+      highlights = [];
+    }
   } catch {
     highlights = [];
   }
@@ -397,7 +408,16 @@ function applyHighlightsToPage(pageIndex) {
   const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)'));
   if (!spans.length) return;
 
+  const totalTextLen = spans.reduce((sum, s) => sum + s.textContent.length, 0);
+
   for (const h of pageHighlights) {
+    if (h.startOffset !== undefined && h.endOffset !== undefined) {
+      const hlLen = h.endOffset - h.startOffset;
+      if (hlLen > totalTextLen * 0.8) {
+        console.warn(`[Marginalia] Skipping bad highlight: covers ${hlLen}/${totalTextLen} chars on page ${pageIndex}`);
+        continue;
+      }
+    }
     applyHighlightToTextLayer(spans, h);
   }
 }
@@ -453,32 +473,37 @@ function wrapSpansAsHighlight(spanRanges, h) {
       copySpanStyles(span, mark);
       span.parentNode.replaceChild(mark, span);
     } else {
-      // Partial span — need to split
-      const before = text.slice(0, start);
-      const middle = text.slice(start, end);
-      const after = text.slice(end);
+      // Partial span — wrap text inline within the span using Range.
+      // Avoids splitting into multiple absolute-positioned elements at the
+      // same coordinates, which renders as overlapping horizontal bars.
+      const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+      let tNode, charPos = 0;
+      let startNode = null, startOff = 0, endNode = null, endOff = 0;
 
-      const parent = span.parentNode;
-      const frag = document.createDocumentFragment();
-
-      if (before) {
-        const beforeSpan = span.cloneNode(false);
-        beforeSpan.textContent = before;
-        frag.appendChild(beforeSpan);
+      while ((tNode = walker.nextNode())) {
+        const len = tNode.length;
+        if (startNode === null && charPos + len > start) {
+          startNode = tNode;
+          startOff = start - charPos;
+        }
+        if (charPos + len >= end) {
+          endNode = tNode;
+          endOff = end - charPos;
+          break;
+        }
+        charPos += len;
       }
 
-      const mark = createMark(h);
-      mark.textContent = middle;
-      copySpanStyles(span, mark);
-      frag.appendChild(mark);
+      if (!startNode || !endNode) continue;
 
-      if (after) {
-        const afterSpan = span.cloneNode(false);
-        afterSpan.textContent = after;
-        frag.appendChild(afterSpan);
+      if (startNode === endNode) {
+        const range = document.createRange();
+        range.setStart(startNode, startOff);
+        range.setEnd(endNode, endOff);
+
+        const mark = createInlineMark(h);
+        range.surroundContents(mark);
       }
-
-      parent.replaceChild(frag, span);
     }
   }
 }
@@ -502,6 +527,18 @@ function createMark(h) {
   mark.style.color = 'transparent';
   mark.style.position = 'absolute';
   mark.style.whiteSpace = 'pre';
+  mark.addEventListener('click', e => {
+    e.stopPropagation();
+    showNoteBubble(e, h);
+  });
+  return mark;
+}
+
+// Inline mark for partial-span highlights (nested inside the span, no positioning)
+function createInlineMark(h) {
+  const mark = document.createElement('mark');
+  mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+  mark.dataset.ocId = h.id;
   mark.addEventListener('click', e => {
     e.stopPropagation();
     showNoteBubble(e, h);
@@ -535,7 +572,9 @@ viewerContainer.addEventListener('mouseup', e => {
     if (!pc) { hideHlToolbar(); return; }
 
     // Compute offsets within this page's text layer
-    const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight), mark'));
+    // :scope > matches only direct children of textLayer, avoiding double-counting
+    // text inside inline marks (which are nested inside spans, not siblings)
+    const spans = Array.from(pc.textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
     const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
 
     pendingHighlight = { text, pageIndex, startOffset, endOffset };

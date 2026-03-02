@@ -59,6 +59,15 @@ if (pageKey) {
   loadLibraryPdf(pageKey);
 }
 
+// Debug helper: run __clearHighlights() in console to wipe stored highlights for current doc
+window.__clearHighlights = async () => {
+  if (!currentPageKey) return console.log('No page loaded');
+  await chrome.storage.local.remove([currentPageKey]);
+  highlights = [];
+  console.log(`Cleared highlights for ${currentPageKey}`);
+  location.reload();
+};
+
 // ── Toolbar handlers ─────────────────────────────────────────────────
 document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(currentScale + SCALE_STEP));
 document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(currentScale - SCALE_STEP));
@@ -341,7 +350,31 @@ async function loadHighlights() {
   if (!currentPageKey || !isContextValid()) { highlights = []; return; }
   try {
     const result = await chrome.storage.local.get([currentPageKey]);
-    highlights = result[currentPageKey] || [];
+    const stored = result[currentPageKey];
+    if (!Array.isArray(stored)) { highlights = []; return; }
+
+    const before = stored.length;
+    // Filter out malformed highlights (missing id, text, or pageIndex)
+    highlights = stored.filter(h =>
+      h && typeof h.id === 'string' && typeof h.text === 'string' &&
+      typeof h.pageIndex === 'number'
+    );
+
+    // Auto-clear highlights created before CSS fix (missing position:absolute on
+    // textLayer spans). Those highlights have wrong offsets. The 'color' field was
+    // added in the same update, so its absence signals pre-fix data.
+    if (highlights.length && highlights.some(h => !h.color)) {
+      console.warn(`[Marginalia] Clearing ${highlights.length} pre-fix highlights (bad offsets)`);
+      highlights = [];
+    }
+
+    if (highlights.length < before) {
+      await chrome.storage.local.set({ [currentPageKey]: highlights });
+    }
+
+    if (highlights.length) {
+      console.log(`[Marginalia] Loaded ${highlights.length} highlights for ${currentPageKey}`);
+    }
   } catch {
     highlights = [];
   }
@@ -365,7 +398,19 @@ function applyHighlightsToPage(pageIndex) {
   const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)'));
   if (!spans.length) return;
 
+  // Compute total text length on this page to validate highlight offsets
+  const totalTextLen = spans.reduce((sum, s) => sum + s.textContent.length, 0);
+
   for (const h of pageHighlights) {
+    // Skip highlights with suspiciously broad offsets (>80% of page text)
+    // These are almost certainly bad data from mis-positioned text layer
+    if (h.startOffset !== undefined && h.endOffset !== undefined) {
+      const hlLen = h.endOffset - h.startOffset;
+      if (hlLen > totalTextLen * 0.8) {
+        console.warn(`[Marginalia] Skipping bad highlight: covers ${hlLen}/${totalTextLen} chars on page ${pageIndex}`);
+        continue;
+      }
+    }
     applyHighlightToTextLayer(spans, h);
   }
 }
@@ -413,36 +458,45 @@ function wrapSpansAsHighlight(spanRanges, h) {
   for (const { span, start, end } of spanRanges) {
     const text = span.textContent;
     if (start === 0 && end === text.length) {
+      // Whole span — replace with absolutely-positioned mark
       const mark = createMark(h);
       mark.textContent = text;
       copySpanStyles(span, mark);
       span.parentNode.replaceChild(mark, span);
     } else {
-      const before = text.slice(0, start);
-      const middle = text.slice(start, end);
-      const after = text.slice(end);
+      // Partial span — wrap text inline within the span using Range.
+      // Avoids splitting into multiple absolute-positioned elements at the
+      // same coordinates, which renders as overlapping horizontal bars.
+      const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+      let tNode, charPos = 0;
+      let startNode = null, startOff = 0, endNode = null, endOff = 0;
 
-      const parent = span.parentNode;
-      const frag = document.createDocumentFragment();
-
-      if (before) {
-        const beforeSpan = span.cloneNode(false);
-        beforeSpan.textContent = before;
-        frag.appendChild(beforeSpan);
+      while ((tNode = walker.nextNode())) {
+        const len = tNode.length;
+        if (startNode === null && charPos + len > start) {
+          startNode = tNode;
+          startOff = start - charPos;
+        }
+        if (charPos + len >= end) {
+          endNode = tNode;
+          endOff = end - charPos;
+          break;
+        }
+        charPos += len;
       }
 
-      const mark = createMark(h);
-      mark.textContent = middle;
-      copySpanStyles(span, mark);
-      frag.appendChild(mark);
+      if (!startNode || !endNode) continue;
 
-      if (after) {
-        const afterSpan = span.cloneNode(false);
-        afterSpan.textContent = after;
-        frag.appendChild(afterSpan);
+      // surroundContents only works within a single text node
+      if (startNode === endNode) {
+        const range = document.createRange();
+        range.setStart(startNode, startOff);
+        range.setEnd(endNode, endOff);
+
+        const mark = createInlineMark(h);
+        range.surroundContents(mark);
       }
-
-      parent.replaceChild(frag, span);
+      // Multi-node case (overlapping highlights on same span) — skip gracefully
     }
   }
 }
@@ -473,6 +527,19 @@ function createMark(h) {
   return mark;
 }
 
+// Inline mark for partial-span highlights (nested inside the span, no positioning)
+function createInlineMark(h) {
+  const mark = document.createElement('mark');
+  const color = h.color || 'orange';
+  mark.className = `oc-highlight oc-hl-${color}${h.comment ? ' oc-highlight-comment' : ''}`;
+  mark.dataset.ocId = h.id;
+  mark.addEventListener('click', e => {
+    e.stopPropagation();
+    if (!highlightMode) showNoteBubble(e, h);
+  });
+  return mark;
+}
+
 // ── Selection and highlighting ───────────────────────────────────────
 viewerContainer.addEventListener('mouseup', e => {
   if ([hlToolbar, annPopup, noteBubble, sidebar, modeBanner, searchBar].some(el => el?.contains(e.target))) return;
@@ -494,7 +561,9 @@ viewerContainer.addEventListener('mouseup', e => {
     const pc = pageContainers[pageIndex];
     if (!pc) { hideHlToolbar(); return; }
 
-    const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight), mark'));
+    // :scope > matches only direct children of textLayer, avoiding double-counting
+    // text inside inline marks (which are nested inside spans, not siblings)
+    const spans = Array.from(pc.textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
     const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
 
     pendingHighlight = { text, pageIndex, startOffset, endOffset };
@@ -938,26 +1007,15 @@ function highlightSearchMatch(idx) {
       if (start === 0 && end === text.length) {
         span.classList.add('search-match', 'active');
       } else {
-        const before = text.slice(0, start);
-        const middle = text.slice(start, end);
-        const after = text.slice(end);
-        const parent = span.parentNode;
-        const frag = document.createDocumentFragment();
-        if (before) {
-          const s = span.cloneNode(false);
-          s.textContent = before;
-          frag.appendChild(s);
-        }
-        const m = span.cloneNode(false);
-        m.textContent = middle;
-        m.classList.add('search-match', 'active');
-        frag.appendChild(m);
-        if (after) {
-          const s = span.cloneNode(false);
-          s.textContent = after;
-          frag.appendChild(s);
-        }
-        parent.replaceChild(frag, span);
+        // Wrap inline within the span to avoid absolute-position overlap
+        const textNode = span.firstChild;
+        if (!textNode || textNode.nodeType !== Node.TEXT_NODE) continue;
+        const range = document.createRange();
+        range.setStart(textNode, start);
+        range.setEnd(textNode, end);
+        const wrapper = document.createElement('span');
+        wrapper.className = 'search-match active';
+        range.surroundContents(wrapper);
       }
     }
   };
@@ -979,7 +1037,15 @@ function highlightSearchMatch(idx) {
 
 function clearSearchHighlights() {
   document.querySelectorAll('.search-match').forEach(el => {
-    el.classList.remove('search-match', 'active');
+    if (el.tagName === 'SPAN' && el.parentNode) {
+      // Unwrap inline search wrappers: move children up and remove wrapper
+      const parent = el.parentNode;
+      while (el.firstChild) parent.insertBefore(el.firstChild, el);
+      parent.removeChild(el);
+      parent.normalize(); // merge adjacent text nodes
+    } else {
+      el.classList.remove('search-match', 'active');
+    }
   });
 }
 

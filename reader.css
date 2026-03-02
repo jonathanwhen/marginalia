@@ -161,6 +161,10 @@ html, body {
 .page-container .textLayer span,
 .page-container .textLayer br {
   color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
   pointer-events: all;
 }
 

@@ -456,8 +456,12 @@ async function syncReadings() {
       isNew: !readings[k].syncedAt
     }));
 
-    const diffMsg = buildDiffMessage(changedEntries);
+    let diffMsg = buildDiffMessage(changedEntries);
     if (diffMsg) {
+      // Telegram has a 4096 char limit per message
+      if (diffMsg.length > 4000) {
+        diffMsg = diffMsg.slice(0, 3980) + '\n\n… (truncated)';
+      }
       telegramOk = await telegramSend(botToken, chatId, diffMsg);
     }
   }
@@ -616,10 +620,15 @@ async function telegramSend(botToken, chatId, text) {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text })
+      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true })
     });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      console.error(`Telegram API error ${res.status}: ${body}`);
+    }
     return res.ok;
-  } catch {
+  } catch (err) {
+    console.error('Telegram send failed:', err.message || err);
     return false;
   }
 }
