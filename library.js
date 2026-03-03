@@ -1,5 +1,5 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
-import { getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript } from './lib/db.js';
+import { getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript, updateTranscriptField } from './lib/db.js';
 import { classifyReading } from './lib/classify.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
@@ -234,11 +234,11 @@ function getFiltered() {
 }
 
 // ── Sorting ──────────────────────────────────────────────────────────
+// Pinned items always come first; each group sorted by the active sort key.
 function sortTranscripts(transcripts) {
-  const copy = [...transcripts];
   const dir = sortAsc ? 1 : -1;
 
-  copy.sort((a, b) => {
+  const compare = (a, b) => {
     let va, vb;
     switch (sortKey) {
       case 'title': va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase(); break;
@@ -250,8 +250,11 @@ function sortTranscripts(transcripts) {
     if (va < vb) return -1 * dir;
     if (va > vb) return 1 * dir;
     return 0;
-  });
-  return copy;
+  };
+
+  const pinned = transcripts.filter(t => t.pinned).sort(compare);
+  const unpinned = transcripts.filter(t => !t.pinned).sort(compare);
+  return [...pinned, ...unpinned];
 }
 
 sortSelect.addEventListener('change', () => {
@@ -312,15 +315,20 @@ function renderGrid() {
     return;
   }
 
-  grid.innerHTML = sorted.map(t => {
+  // Find the boundary between pinned and unpinned items for the divider
+  const pinnedCount = sorted.filter(t => t.pinned).length;
+  const hasDivider = pinnedCount > 0 && pinnedCount < sorted.length;
+
+  grid.innerHTML = sorted.map((t, i) => {
     const tagsHtml = (t.tags || []).map(tag => {
       const color = getTagColor(tag);
       return `<span class="card-tag" style="border-color:${color}; color:${color}; background:color-mix(in srgb, ${color} 10%, transparent);">${escHtml(tag)}</span>`;
     }).join('');
 
     const preview = (t.content || '').slice(0, 200);
+    const isPinned = !!t.pinned;
 
-    return `<div class="transcript-card" data-key="${escAttr(t.pageKey)}">
+    const card = `<div class="transcript-card${isPinned ? ' pinned' : ''}" data-key="${escAttr(t.pageKey)}">
       <div class="card-title">${escHtml(t.title || '(untitled)')}</div>
       ${t.author ? `<div class="card-author">${escHtml(t.author)}</div>` : ''}
       <div class="card-meta">
@@ -331,18 +339,39 @@ function renderGrid() {
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ''}
       <div class="card-preview">${escHtml(preview)}</div>
       <div class="card-actions">
+        <button class="card-pin${isPinned ? ' active' : ''}" data-key="${escAttr(t.pageKey)}" title="${isPinned ? 'Unpin' : 'Pin to top'}">&#x1F4CC;</button>
         <button class="card-delete" data-key="${escAttr(t.pageKey)}">Delete</button>
       </div>
     </div>`;
+
+    // Insert divider after the last pinned card
+    if (hasDivider && i === pinnedCount - 1) {
+      return card + '<div class="pin-divider"></div>';
+    }
+    return card;
   }).join('');
 
   // Wire card clicks → open reader
   grid.querySelectorAll('.transcript-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.card-delete')) return;
+      if (e.target.closest('.card-delete') || e.target.closest('.card-pin')) return;
       const key = card.dataset.key;
       const readerUrl = chrome.runtime.getURL(`library-reader.html?key=${encodeURIComponent(key)}`);
       window.location.href = readerUrl;
+    });
+  });
+
+  // Wire pin buttons
+  grid.querySelectorAll('.card-pin').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.key;
+      const t = allTranscripts.find(x => x.pageKey === key);
+      if (!t) return;
+      const newPinned = !t.pinned;
+      await updateTranscriptField(key, 'pinned', newPinned);
+      t.pinned = newPinned;
+      renderGrid();
     });
   });
 
