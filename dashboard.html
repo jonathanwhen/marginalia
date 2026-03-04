@@ -52,6 +52,9 @@
     .page-nav a:hover { color: var(--text); background: var(--surface-2); }
     .page-nav a.active { color: var(--accent); background: var(--accent-dim); }
     .page-nav .nav-spacer { flex: 1; }
+    .nav-sync-btn { background:none; border:1px solid #3a3a4a; color:#888; font-size:12px; cursor:pointer; padding:4px 12px; border-radius:6px; font-family:inherit; transition:all .15s; }
+    .nav-sync-btn:hover { color:#e8a87c; border-color:#e8a87c; }
+    .nav-sync-btn.syncing { color:#e8a87c; opacity:.7; cursor:wait; }
 
     /* ── Header ── */
     .dash-header { display: flex; align-items: center; margin-bottom: 36px; }
@@ -381,6 +384,7 @@
     <a href="library.html">Library</a>
     <a href="graph.html">Knowledge Graph</a>
     <span class="nav-spacer"></span>
+    <button id="nav-sync-btn" class="nav-sync-btn" title="Sync Now (⌘⇧S)">Sync</button>
     <a href="options.html">Settings</a>
   </nav>
   <div class="dashboard">
@@ -431,5 +435,6 @@
   </div>
 
   <script src="dashboard.js"></script>
+  <script src="nav-sync.js"></script>
 </body>
 </html>
