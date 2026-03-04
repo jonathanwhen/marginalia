@@ -199,28 +199,6 @@ function escHtml(str) {
 async function loadTranscripts() {
   allTranscripts = await getAllTranscriptsMeta();
 
-  // Merge in ocReadings (web readings synced via GitHub) that don't have
-  // a local PDF transcript, so the library shows everything in one place.
-  const { ocReadings = {} } = await chrome.storage.local.get('ocReadings');
-  const transcriptKeys = new Set(allTranscripts.map(t => t.pageKey));
-  for (const [pageKey, reading] of Object.entries(ocReadings)) {
-    if (!transcriptKeys.has(pageKey)) {
-      allTranscripts.push({
-        pageKey,
-        title: reading.title || '(untitled)',
-        author: reading.author || '',
-        tags: reading.tags || [],
-        pageCount: reading.estPages || 0,
-        wordCount: 0,
-        content: reading.notes || '',
-        importedAt: reading.createdAt || '',
-        pinned: false,
-        isWebReading: true,  // flag to distinguish from local PDFs
-        url: reading.url || pageKey
-      });
-    }
-  }
-
   // Enrich with highlight counts from chrome.storage.local
   if (allTranscripts.length) {
     const keys = allTranscripts.map(t => t.pageKey);
@@ -231,7 +209,7 @@ async function loadTranscripts() {
     }
   }
 
-  countEl.textContent = `${allTranscripts.length} item${allTranscripts.length !== 1 ? 's' : ''}`;
+  countEl.textContent = `${allTranscripts.length} transcript${allTranscripts.length !== 1 ? 's' : ''}`;
   toolbar.style.display = allTranscripts.length > 0 ? 'flex' : 'none';
 
   renderTagFilters();
@@ -350,15 +328,12 @@ function renderGrid() {
     const preview = (t.content || '').slice(0, 200);
     const isPinned = !!t.pinned;
 
-    const isWeb = !!t.isWebReading;
-    const typeLabel = isWeb ? '<span style="color:#7ca8e8;">web</span>' : `<span>${(t.wordCount || 0).toLocaleString()} words</span>`;
-
-    const card = `<div class="transcript-card${isPinned ? ' pinned' : ''}${isWeb ? ' web-reading' : ''}" data-key="${escAttr(t.pageKey)}"${isWeb ? ` data-url="${escAttr(t.url)}"` : ''}>
+    const card = `<div class="transcript-card${isPinned ? ' pinned' : ''}" data-key="${escAttr(t.pageKey)}">
       <div class="card-title">${escHtml(t.title || '(untitled)')}</div>
       ${t.author ? `<div class="card-author">${escHtml(t.author)}</div>` : ''}
       <div class="card-meta">
         <span>${t.pageCount || 0} pages</span>
-        ${typeLabel}
+        <span>${(t.wordCount || 0).toLocaleString()} words</span>
         ${t.hlCount > 0 ? `<span style="color:var(--accent);">${t.hlCount} highlights</span>` : ''}
       </div>
       ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ''}
@@ -376,20 +351,13 @@ function renderGrid() {
     return card;
   }).join('');
 
-  // Wire card clicks → open reader (PDFs) or original URL (web readings)
+  // Wire card clicks → open reader
   grid.querySelectorAll('.transcript-card').forEach(card => {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.card-delete') || e.target.closest('.card-pin')) return;
       const key = card.dataset.key;
-      const url = card.dataset.url;
-      if (url) {
-        // Web reading — open original URL
-        chrome.tabs.create({ url });
-      } else {
-        // Local PDF — open reader
-        const readerUrl = chrome.runtime.getURL(`library-reader.html?key=${encodeURIComponent(key)}`);
-        window.location.href = readerUrl;
-      }
+      const readerUrl = chrome.runtime.getURL(`library-reader.html?key=${encodeURIComponent(key)}`);
+      window.location.href = readerUrl;
     });
   });
 
@@ -401,11 +369,7 @@ function renderGrid() {
       const t = allTranscripts.find(x => x.pageKey === key);
       if (!t) return;
       const newPinned = !t.pinned;
-      if (!t.isWebReading) {
-        await updateTranscriptField(key, 'pinned', newPinned);
-      }
-      // For web readings, pin state is in-memory only (resets on reload).
-      // Persistent pin for web readings would need a separate storage key.
+      await updateTranscriptField(key, 'pinned', newPinned);
       t.pinned = newPinned;
       renderGrid();
     });
