@@ -142,3 +142,79 @@ document.getElementById('restore-file-input').addEventListener('change', async (
 
   e.target.value = '';
 });
+
+// ── Settings export/import ───────────────────────────────────────────
+const SETTINGS_KEYS = ['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir', 'claudeApiKey', 'autoExtract'];
+const settingsMsg = document.getElementById('settings-transfer-msg');
+
+function showSettingsMsg(text, isError) {
+  settingsMsg.textContent = text;
+  settingsMsg.style.display = 'block';
+  settingsMsg.style.color = isError ? '#eb5757' : '#6fcf97';
+  if (!isError) setTimeout(() => { settingsMsg.style.display = 'none'; }, 4000);
+}
+
+// Export
+document.getElementById('export-settings-btn').addEventListener('click', async () => {
+  const settings = await chrome.storage.sync.get(SETTINGS_KEYS);
+  const { ocFlushIntervalMinutes } = await chrome.storage.local.get('ocFlushIntervalMinutes');
+  if (ocFlushIntervalMinutes) settings.ocFlushIntervalMinutes = ocFlushIntervalMinutes;
+
+  const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'marginalia-settings.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showSettingsMsg('Settings exported');
+});
+
+// Import
+document.getElementById('import-settings-btn').addEventListener('click', () => {
+  document.getElementById('import-settings-input').click();
+});
+
+document.getElementById('import-settings-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const settings = JSON.parse(text);
+
+    // Split into sync and local keys
+    const syncItems = {};
+    const localItems = {};
+    for (const [key, value] of Object.entries(settings)) {
+      if (key === 'ocFlushIntervalMinutes') {
+        localItems[key] = value;
+      } else if (SETTINGS_KEYS.includes(key)) {
+        syncItems[key] = value;
+      }
+    }
+
+    if (Object.keys(syncItems).length) await chrome.storage.sync.set(syncItems);
+    if (Object.keys(localItems).length) await chrome.storage.local.set(localItems);
+
+    // Update form fields to reflect imported values
+    for (const key of SETTINGS_KEYS) {
+      const el = document.getElementById(key);
+      if (!el) continue;
+      if (el.type === 'checkbox') {
+        el.checked = !!settings[key];
+      } else if (settings[key] !== undefined) {
+        el.value = settings[key];
+      }
+    }
+    if (settings.ocFlushIntervalMinutes) {
+      document.getElementById('flushInterval').value = settings.ocFlushIntervalMinutes;
+    }
+
+    showSettingsMsg(`Imported ${Object.keys(settings).length} settings`);
+  } catch (err) {
+    showSettingsMsg(`Error: ${err.message}`, true);
+  }
+
+  e.target.value = '';
+});

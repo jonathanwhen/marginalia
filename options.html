@@ -126,6 +126,18 @@
     <div class="saved" id="restore-msg" style="margin-top:8px;"></div>
   </div>
 
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Settings Transfer</h2>
+
+  <div class="field">
+    <div class="hint" style="margin-bottom:10px;">Export or import settings to share between Chrome extension and Electron app.</div>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <button id="export-settings-btn" style="background:none; border:1px solid #e8a87c; color:#e8a87c;">Export Settings</button>
+      <button id="import-settings-btn" style="background:none; border:1px solid #e8a87c; color:#e8a87c;">Import Settings</button>
+      <input type="file" id="import-settings-input" accept=".json" hidden />
+    </div>
+    <div class="saved" id="settings-transfer-msg" style="margin-top:8px;"></div>
+  </div>
+
   </div>
   <script src="options.js"></script>
 </body>

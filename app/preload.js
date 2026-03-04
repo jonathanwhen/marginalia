@@ -56,10 +56,11 @@ const runtime = {
   },
 
   sendMessage(msg, callback) {
-    ipcRenderer.invoke('runtime-send-message', msg).then(result => {
+    const promise = ipcRenderer.invoke('runtime-send-message', msg).then(result => {
       if (callback) callback(result);
+      return result;
     });
-    return true;
+    return promise;
   },
 
   onMessage: {
