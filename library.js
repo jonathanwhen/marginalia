@@ -125,7 +125,27 @@ async function importSingleFile(file) {
   const hashBuffer = await crypto.subtle.digest('SHA-256', hashData);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
-  const pageKey = `library:${hashHex}-${arrayBuffer.byteLength}-${file.name}`;
+  let pageKey = `library:${hashHex}-${arrayBuffer.byteLength}-${file.name}`;
+
+  // Check if a reading/highlights already exist under a different filename
+  // but same content hash (e.g. re-importing an exported PDF with a renamed file).
+  // This handles cases where the export renames the file or the browser appends (1).
+  const hashPrefix = `library:${hashHex}-${arrayBuffer.byteLength}-`;
+  const storageData = await chrome.storage.local.get(null);
+  const existingKey = Object.keys(storageData).find(k =>
+    k.startsWith(hashPrefix) && k !== pageKey && (
+      Array.isArray(storageData[k]) || // highlight array
+      (k in (storageData.ocReadings || {})) // reading entry
+    )
+  );
+  if (existingKey) {
+    pageKey = existingKey; // reuse the original pageKey so highlights reconnect
+  } else {
+    // Also check inside ocReadings keys
+    const { ocReadings = {} } = storageData;
+    const readingKey = Object.keys(ocReadings).find(k => k.startsWith(hashPrefix) && k !== pageKey);
+    if (readingKey) pageKey = readingKey;
+  }
 
   // Dedup check
   if (await hasTranscript(pageKey)) return 'duplicate';
@@ -418,7 +438,9 @@ function renderGrid() {
         a.href = url;
         // Use original filename from pageKey so re-import generates the same
         // pageKey and highlights reconnect. Format: library:<hash>-<size>-<filename>
-        const origName = key.replace(/^library:[0-9a-f]+-\d+-/, '') || title.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf';
+        let origName = key.replace(/^library:[0-9a-f]+-\d+-/, '') || title.replace(/[^a-zA-Z0-9 _-]/g, '');
+        // Ensure exactly one .pdf extension
+        origName = origName.replace(/\.pdf$/i, '') + '.pdf';
         a.download = origName;
         a.click();
         URL.revokeObjectURL(url);
