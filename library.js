@@ -1,5 +1,5 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
-import { getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript, updateTranscriptField } from './lib/db.js';
+import { getTranscript, getAllTranscriptsMeta, putTranscript, hasTranscript, deleteTranscript, updateTranscriptField } from './lib/db.js';
 import { classifyReading } from './lib/classify.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
@@ -340,6 +340,7 @@ function renderGrid() {
       <div class="card-preview">${escHtml(preview)}</div>
       <div class="card-actions">
         <button class="card-pin${isPinned ? ' active' : ''}" data-key="${escAttr(t.pageKey)}" title="${isPinned ? 'Unpin' : 'Pin to top'}">&#x1F4CC;</button>
+        <button class="card-export" data-key="${escAttr(t.pageKey)}" data-title="${escAttr(t.title || 'document')}" title="Export PDF">Export</button>
         <button class="card-delete" data-key="${escAttr(t.pageKey)}">Delete</button>
       </div>
     </div>`;
@@ -394,6 +395,34 @@ function renderGrid() {
         return;
       }
       await deleteLibraryItem(btn.dataset.key);
+    });
+  });
+
+  // Wire export buttons
+  grid.querySelectorAll('.card-export').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.key;
+      const title = btn.dataset.title || 'document';
+      btn.textContent = '...';
+      try {
+        const transcript = await getTranscript(key);
+        if (!transcript?.pdfData) {
+          btn.textContent = 'No PDF';
+          setTimeout(() => { btn.textContent = 'Export'; }, 2000);
+          return;
+        }
+        const blob = new Blob([transcript.pdfData], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = title.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf';
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Export failed:', err);
+      }
+      btn.textContent = 'Export';
     });
   });
 }

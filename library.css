@@ -206,11 +206,12 @@ body {
 .transcript-card.pinned {
   border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
 }
-.card-delete {
+.card-delete, .card-export {
   background: none; border: 1px solid var(--border); color: var(--text-3);
   font-size: 11px; cursor: pointer; padding: 3px 10px;
   border-radius: 4px; transition: all 0.15s; font-family: var(--font);
 }
+.card-export:hover { color: var(--accent); border-color: var(--accent); }
 .card-delete:hover { color: var(--red); border-color: var(--red); background: rgba(235, 87, 87, 0.1); }
 .card-delete.confirm { color: var(--red); border-color: var(--red); background: rgba(235, 87, 87, 0.1); }
 
