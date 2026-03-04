@@ -11,8 +11,10 @@ const fs = require('fs');
 const storage = require('./storage');
 const sync = require('./sync');
 
-// Extension root — one level up from app/
-const EXT_ROOT = path.resolve(__dirname, '..');
+// Extension root — in dev: one level up from app/, in packaged: resources/ext/
+const EXT_ROOT = app.isPackaged
+  ? path.join(process.resourcesPath, 'ext')
+  : path.resolve(__dirname, '..');
 
 let mainWindow = null;
 let syncInterval = null;

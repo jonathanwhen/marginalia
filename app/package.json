@@ -5,9 +5,68 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "dist": "electron-builder --mac",
+    "dist:dmg": "electron-builder --mac dmg"
   },
-  "dependencies": {
-    "electron": "^33.0.0"
+  "build": {
+    "appId": "com.marginalia.app",
+    "productName": "Marginalia",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "storage.js",
+      "sync.js"
+    ],
+    "extraResources": [
+      {
+        "from": "../",
+        "to": "ext",
+        "filter": [
+          "**/*",
+          "!app/**",
+          "!dist-firefox/**",
+          "!node_modules/**",
+          "!.git/**",
+          "!.gitignore",
+          "!TODO.md",
+          "!build-firefox.sh",
+          "!manifest.firefox.json",
+          "!*.dmg"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        }
+      ],
+      "icon": "icon.png",
+      "fileAssociations": [
+        {
+          "ext": "pdf",
+          "name": "PDF Document",
+          "role": "Viewer"
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Marginalia",
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
+    }
+  },
+  "author": "jwen",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   }
 }
