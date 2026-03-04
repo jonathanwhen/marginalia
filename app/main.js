@@ -70,6 +70,11 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(EXT_ROOT, 'library.html'));
 
+  // Open devtools in dev mode
+  if (process.argv.includes('--dev')) {
+    mainWindow.webContents.openDevTools();
+  }
+
   mainWindow.on('closed', () => { mainWindow = null; });
 
   // Open external URLs in system browser, allow local navigation

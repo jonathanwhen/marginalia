@@ -1,9 +1,13 @@
 /**
  * Preload script: bridges chrome.* APIs to Electron IPC.
- * Exposed via contextBridge so extension HTML/JS works unmodified.
+ *
+ * Since window.chrome already exists in Chromium, we can't use
+ * contextBridge.exposeInMainWorld('chrome', ...). Instead we expose
+ * the polyfill as __marginaliaChrome and remap it to window.chrome
+ * in the main world via webFrame.executeJavaScript.
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 // ── Storage polyfill ─────────────────────────────────────────────────
 function makeStorageArea(area) {
@@ -45,6 +49,10 @@ const runtime = {
 
   getURL(path) {
     return ipcRenderer.sendSync('runtime-get-url', path);
+  },
+
+  openOptionsPage() {
+    ipcRenderer.send('navigate', 'options.html');
   },
 
   sendMessage(msg, callback) {
@@ -101,8 +109,8 @@ const contextMenus = {
   onClicked: { addListener() {} }
 };
 
-// ── Expose chrome.* API ──────────────────────────────────────────────
-contextBridge.exposeInMainWorld('chrome', {
+// ── Expose as __marginaliaChrome (contextBridge-safe name) ───────────
+contextBridge.exposeInMainWorld('__marginaliaChrome', {
   storage: {
     local: makeStorageArea('local'),
     sync: makeStorageArea('sync'),
@@ -116,3 +124,10 @@ contextBridge.exposeInMainWorld('chrome', {
   contextMenus,
   webNavigation: { onBeforeNavigate: { addListener() {} } }
 });
+
+// ── Remap to window.chrome in the main world ─────────────────────────
+// This runs before page scripts, overwriting the built-in chrome object.
+webFrame.executeJavaScript(`
+  window.chrome = window.__marginaliaChrome;
+  delete window.__marginaliaChrome;
+`);
