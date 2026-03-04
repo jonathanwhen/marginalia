@@ -416,7 +416,10 @@ function renderGrid() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = title.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf';
+        // Use original filename from pageKey so re-import generates the same
+        // pageKey and highlights reconnect. Format: library:<hash>-<size>-<filename>
+        const origName = key.replace(/^library:[0-9a-f]+-\d+-/, '') || title.replace(/[^a-zA-Z0-9 _-]/g, '') + '.pdf';
+        a.download = origName;
         a.click();
         URL.revokeObjectURL(url);
       } catch (err) {
