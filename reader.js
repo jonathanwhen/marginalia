@@ -497,12 +497,31 @@ function wrapSpansAsHighlight(spanRanges, h) {
       if (!startNode || !endNode) continue;
 
       if (startNode === endNode) {
+        // Single text node: use surroundContents
         const range = document.createRange();
         range.setStart(startNode, startOff);
         range.setEnd(endNode, endOff);
 
         const mark = createInlineMark(h);
         range.surroundContents(mark);
+      } else {
+        // Multi-node: wrap each text node portion individually
+        const walker2 = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+        let tNode2, inRange = false;
+        const toWrap = [];
+        while ((tNode2 = walker2.nextNode())) {
+          if (tNode2 === startNode) { inRange = true; toWrap.push({ node: tNode2, s: startOff, e: tNode2.length }); continue; }
+          if (inRange && tNode2 !== endNode) { toWrap.push({ node: tNode2, s: 0, e: tNode2.length }); continue; }
+          if (tNode2 === endNode) { toWrap.push({ node: tNode2, s: 0, e: endOff }); break; }
+        }
+        for (const { node: wNode, s: ws, e: we } of toWrap) {
+          if (ws >= we) continue;
+          const r = document.createRange();
+          r.setStart(wNode, ws);
+          r.setEnd(wNode, we);
+          const mark = createInlineMark(h);
+          r.surroundContents(mark);
+        }
       }
     }
   }
@@ -646,6 +665,11 @@ document.getElementById('hl-btn-comment').addEventListener('click', e => {
 });
 
 function createHighlight(pending, comment) {
+  // Attempt LaTeX reconstruction from text layer spans
+  const pc = pageContainers[pending.pageIndex];
+  const spans = pc ? Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)')) : [];
+  const latex = reconstructMathText(spans, pending.startOffset, pending.endOffset);
+
   const h = {
     id: crypto.randomUUID(),
     text: pending.text.slice(0, 300),
@@ -653,7 +677,8 @@ function createHighlight(pending, comment) {
     timestamp: new Date().toISOString(),
     pageIndex: pending.pageIndex,
     startOffset: pending.startOffset,
-    endOffset: pending.endOffset
+    endOffset: pending.endOffset,
+    ...(latex ? { latex } : {})
   };
 
   highlights.push(h);
@@ -720,6 +745,7 @@ function showNoteBubble(event, h) {
   const hasComment = !!h.comment;
   noteBubble.innerHTML = `
     <div class="nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
+    ${h.latex ? `<div class="nb-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
     ${hasComment ? `<div class="nb-comment">${escHtml(h.comment)}</div>` : ''}
     <div class="nb-edit-section" style="display:none;">
       <textarea class="nb-edit-input" placeholder="Add a note...">${escHtml(h.comment || '')}</textarea>
@@ -898,6 +924,7 @@ function refreshSidebarHighlights() {
   list.innerHTML = highlights.map(h => `
     <div class="sb-hl-item" data-hl-id="${escAttr(h.id)}" data-page="${h.pageIndex}">
       <div class="sb-hl-quote">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}"</div>
+      ${h.latex ? `<div class="sb-hl-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
       ${h.comment ? `<div class="sb-hl-comment">\u2014 ${escHtml(h.comment)}</div>` : ''}
       <div class="sb-hl-page">Page ${h.pageIndex + 1}</div>
     </div>
@@ -966,6 +993,135 @@ document.addEventListener('keydown', e => {
     setZoom(1.5);
   }
 });
+
+// ── Markdown + LaTeX rendering pipeline ──────────────────────────────
+function renderMarkdownWithMath(text) {
+  if (!text) return '';
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return escHtml(text);
+
+  let html = marked.parse(text);
+  html = DOMPurify.sanitize(html);
+
+  if (typeof katex !== 'undefined') {
+    html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_match, tex) => {
+      try {
+        return katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false });
+      } catch { return `<code>${escHtml(tex)}</code>`; }
+    });
+    html = html.replace(/(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)\$/g, (_match, tex) => {
+      try {
+        return katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false });
+      } catch { return `<code>${escHtml(tex)}</code>`; }
+    });
+  }
+
+  return html;
+}
+
+// ── Sidebar tab switching ────────────────────────────────────────────
+document.querySelectorAll('.sb-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.sb-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+
+    const editPane = document.getElementById('sb-edit-pane');
+    const previewPane = document.getElementById('sb-preview-pane');
+
+    if (tab.dataset.tab === 'preview') {
+      editPane.classList.add('hidden');
+      previewPane.classList.remove('hidden');
+      const notes = document.getElementById('sb-notes').value;
+      previewPane.innerHTML = renderMarkdownWithMath(notes) || '<div class="sb-preview-empty">Nothing to preview.</div>';
+    } else {
+      previewPane.classList.add('hidden');
+      editPane.classList.remove('hidden');
+      document.getElementById('sb-notes').focus();
+    }
+  });
+});
+
+// ── Math reconstruction from PDF text layer ──────────────────────────
+const UNICODE_TO_LATEX = {
+  '\u2211': '\\sum', '\u220F': '\\prod', '\u222B': '\\int', '\u221E': '\\infty',
+  '\u2202': '\\partial', '\u2207': '\\nabla', '\u00D7': '\\times', '\u00F7': '\\div',
+  '\u00B1': '\\pm', '\u2213': '\\mp', '\u2264': '\\leq', '\u2265': '\\geq',
+  '\u2260': '\\neq', '\u2248': '\\approx', '\u221D': '\\propto', '\u2261': '\\equiv',
+  '\u2208': '\\in', '\u2209': '\\notin', '\u2282': '\\subset', '\u2283': '\\supset',
+  '\u2286': '\\subseteq', '\u2287': '\\supseteq', '\u222A': '\\cup', '\u2229': '\\cap',
+  '\u2205': '\\emptyset', '\u2200': '\\forall', '\u2203': '\\exists',
+  '\u00AC': '\\neg', '\u2227': '\\land', '\u2228': '\\lor',
+  '\u2192': '\\to', '\u2190': '\\leftarrow', '\u21D2': '\\Rightarrow', '\u21D4': '\\Leftrightarrow',
+  '\u03B1': '\\alpha', '\u03B2': '\\beta', '\u03B3': '\\gamma', '\u03B4': '\\delta',
+  '\u03B5': '\\epsilon', '\u03B6': '\\zeta', '\u03B7': '\\eta', '\u03B8': '\\theta',
+  '\u03B9': '\\iota', '\u03BA': '\\kappa', '\u03BB': '\\lambda', '\u03BC': '\\mu',
+  '\u03BD': '\\nu', '\u03BE': '\\xi', '\u03C0': '\\pi', '\u03C1': '\\rho',
+  '\u03C3': '\\sigma', '\u03C4': '\\tau', '\u03C5': '\\upsilon', '\u03C6': '\\phi',
+  '\u03C7': '\\chi', '\u03C8': '\\psi', '\u03C9': '\\omega',
+  '\u0393': '\\Gamma', '\u0394': '\\Delta', '\u0398': '\\Theta', '\u039B': '\\Lambda',
+  '\u039E': '\\Xi', '\u03A0': '\\Pi', '\u03A3': '\\Sigma', '\u03A6': '\\Phi',
+  '\u03A8': '\\Psi', '\u03A9': '\\Omega',
+  '\u221A': '\\sqrt', '\u2026': '\\ldots', '\u22C5': '\\cdot', '\u2218': '\\circ',
+  '\u2297': '\\otimes', '\u2295': '\\oplus', '\u22C6': '\\star',
+};
+
+function mapUnicodeToLatex(text) {
+  let result = '';
+  for (const ch of text) {
+    result += UNICODE_TO_LATEX[ch] || ch;
+  }
+  return result;
+}
+
+function reconstructMathText(spans, startOffset, endOffset) {
+  if (!spans.length) return null;
+
+  let pos = 0;
+  const rangeSpans = [];
+  for (const span of spans) {
+    const len = span.textContent.length;
+    const spanEnd = pos + len;
+    if (spanEnd <= startOffset) { pos = spanEnd; continue; }
+    if (pos >= endOffset) break;
+    rangeSpans.push(span);
+    pos = spanEnd;
+  }
+
+  if (!rangeSpans.length) return null;
+
+  const fullText = rangeSpans.map(s => s.textContent).join('');
+  const hasMathChars = /[\u03B1-\u03C9\u0393-\u03A9\u2200-\u22FF\u221A\u222B\u2211\u220F\u2202\u2207]/.test(fullText);
+  if (!hasMathChars) return null;
+
+  let latex = '';
+  let baseSize = null;
+
+  for (const span of rangeSpans) {
+    const style = span.style;
+    const fontSize = parseFloat(style.fontSize) || null;
+    const top = parseFloat(style.top) || 0;
+    const text = span.textContent;
+
+    if (baseSize === null && fontSize) baseSize = fontSize;
+
+    const mapped = mapUnicodeToLatex(text);
+
+    if (baseSize && fontSize && fontSize < baseSize * 0.8) {
+      const prevSpan = rangeSpans[rangeSpans.indexOf(span) - 1];
+      const prevTop = prevSpan ? (parseFloat(prevSpan.style.top) || 0) : top;
+
+      if (top > prevTop) {
+        latex += `_{${mapped}}`;
+      } else {
+        latex += `^{${mapped}}`;
+      }
+    } else {
+      latex += mapped;
+    }
+  }
+
+  if (latex === fullText) return null;
+  return latex.trim() || null;
+}
 
 // ── Utility ─────────────────────────────────────────────────────────
 function escHtml(str) {

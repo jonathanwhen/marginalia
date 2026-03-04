@@ -52,7 +52,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const hlResult = await chrome.storage.local.get([pageKey]);
   const highlights = hlResult[pageKey] || [];
   highlights.push({
-    id: Date.now().toString(),
+    id: crypto.randomUUID(),
     text: text.slice(0, 300),
     comment: '',
     timestamp: new Date().toISOString()
@@ -206,6 +206,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'oc-restore-from-github') {
     restoreFromGitHub().then(result => sendResponse(result));
+    return true;
+  }
+  if (msg.type === 'oc-extract-concepts') {
+    extractConceptsForReading(msg.pageKey).then(result => sendResponse({ ok: true, ...result })).catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-extract-concepts-batch') {
+    extractConceptsBatch(msg.pageKeys).then(result => sendResponse(result)).catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-get-concepts') {
+    chrome.storage.local.get('ocConcepts', ({ ocConcepts }) => sendResponse(ocConcepts || { readings: {}, edges: [] }));
     return true;
   }
 });
@@ -378,12 +390,12 @@ async function githubPushFile(ghToken, ghOwner, ghRepo, ghPath, content, sha) {
   }
 }
 
-// Clear cached SHA when GitHub credentials change
+// Clear cached SHAs when GitHub credentials change
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
-  const ghKeys = ['ghToken', 'ghOwner', 'ghRepo', 'ghPath'];
+  const ghKeys = ['ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir'];
   if (ghKeys.some(k => k in changes)) {
-    chrome.storage.local.remove('ocGitHubSha');
+    chrome.storage.local.remove(['ocGitHubSha', 'ocMarkdownShas']);
   }
 });
 
@@ -405,10 +417,320 @@ function buildDiffMessage(changedEntries) {
   return lines.join('\n\n');
 }
 
+// ── LLM concept extraction ───────────────────────────────────────────
+
+async function extractConcepts(reading, highlights, existingTitles) {
+  const { claudeApiKey } = await chrome.storage.sync.get('claudeApiKey');
+  if (!claudeApiKey) throw new Error('No Claude API key configured');
+
+  const hlText = highlights
+    .slice(0, 30) // limit to avoid token overflow
+    .map(h => `- "${h.text}"${h.comment ? ` (note: ${h.comment})` : ''}`)
+    .join('\n');
+
+  const prompt = `Analyze this reading and extract key concepts.
+
+Title: ${reading.title}
+Author: ${reading.author || 'Unknown'}
+Tags: ${(reading.tags || []).join(', ')}
+Notes: ${reading.notes || '(none)'}
+Highlights:
+${hlText || '(none)'}
+
+Other readings in library: ${existingTitles.slice(0, 50).join(', ')}
+
+Return JSON with:
+- concepts: [{name: string, type: "theory"|"method"|"person"|"field"|"tool"|"dataset"|"finding"}]
+- domains: [string] (broad academic domains)
+- connections: [{title: string, shared_concepts: [string]}] (connections to other readings listed above)
+
+Return ONLY valid JSON, no markdown fences.`;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': claudeApiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Claude API error ${res.status}: ${body}`);
+  }
+
+  const data = await res.json();
+  const text = data.content?.[0]?.text || '';
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Try extracting JSON from response
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('Failed to parse Claude response as JSON');
+  }
+}
+
+async function extractConceptsForReading(pageKey) {
+  const readings = await getReadings();
+  const reading = readings[pageKey];
+  if (!reading) throw new Error('Reading not found');
+
+  const hlData = await chrome.storage.local.get([pageKey]);
+  const highlights = hlData[pageKey] || [];
+  const existingTitles = Object.values(readings).map(r => r.title).filter(Boolean);
+
+  const result = await extractConcepts(reading, highlights, existingTitles);
+
+  // Store in ocConcepts
+  const { ocConcepts = { readings: {}, edges: [] } } = await chrome.storage.local.get('ocConcepts');
+
+  ocConcepts.readings[pageKey] = {
+    concepts: result.concepts || [],
+    domains: result.domains || [],
+    extractedAt: new Date().toISOString()
+  };
+
+  // Rebuild edges: shared concepts between readings
+  const allReadingKeys = Object.keys(ocConcepts.readings);
+  const newEdges = [];
+  for (let i = 0; i < allReadingKeys.length; i++) {
+    const aKey = allReadingKeys[i];
+    const aConcepts = new Set((ocConcepts.readings[aKey]?.concepts || []).map(c => c.name.toLowerCase()));
+    for (let j = i + 1; j < allReadingKeys.length; j++) {
+      const bKey = allReadingKeys[j];
+      const bConcepts = (ocConcepts.readings[bKey]?.concepts || []).map(c => c.name.toLowerCase());
+      const shared = bConcepts.filter(c => aConcepts.has(c));
+      if (shared.length > 0) {
+        newEdges.push({ source: aKey, target: bKey, shared });
+      }
+    }
+  }
+  ocConcepts.edges = newEdges;
+
+  // Also incorporate explicit connections from Claude
+  if (result.connections) {
+    for (const conn of result.connections) {
+      const targetKey = Object.entries(readings).find(([_, r]) => r.title === conn.title)?.[0];
+      if (targetKey && targetKey !== pageKey) {
+        const exists = ocConcepts.edges.some(e =>
+          (e.source === pageKey && e.target === targetKey) || (e.source === targetKey && e.target === pageKey)
+        );
+        if (!exists) {
+          ocConcepts.edges.push({ source: pageKey, target: targetKey, shared: conn.shared_concepts });
+        }
+      }
+    }
+  }
+
+  await chrome.storage.local.set({ ocConcepts });
+  return result;
+}
+
+async function extractConceptsBatch(pageKeys) {
+  const results = { extracted: 0, skipped: 0, failed: 0 };
+  const readings = await getReadings();
+  const { ocConcepts = { readings: {}, edges: [] } } = await chrome.storage.local.get('ocConcepts');
+
+  for (const key of pageKeys) {
+    // Skip if already extracted and reading hasn't changed
+    const existing = ocConcepts.readings[key];
+    const reading = readings[key];
+    if (existing?.extractedAt && reading?.updatedAt && existing.extractedAt >= reading.updatedAt) {
+      results.skipped++;
+      continue;
+    }
+
+    try {
+      await extractConceptsForReading(key);
+      results.extracted++;
+      // Rate limit: 500ms between calls
+      await new Promise(r => setTimeout(r, 500));
+    } catch (e) {
+      console.error(`Concept extraction failed for ${key}:`, e);
+      results.failed++;
+    }
+  }
+  return results;
+}
+
+// ── Markdown notes sync (Obsidian-compatible) ────────────────────────
+
+function makeMarkdownFilename(reading, pageKey) {
+  // Slugify title: lowercase, strip special chars, collapse hyphens, max 60 chars
+  const slug = (reading.title || 'untitled')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 60);
+
+  // 6-char hash of pageKey for uniqueness
+  let hash = 0;
+  for (let i = 0; i < pageKey.length; i++) {
+    hash = ((hash << 5) - hash + pageKey.charCodeAt(i)) | 0;
+  }
+  const hashStr = Math.abs(hash).toString(36).slice(0, 6).padEnd(6, '0');
+
+  return `${slug}-${hashStr}.md`;
+}
+
+function buildMarkdownContent(pageKey, reading, highlights) {
+  const lines = ['---'];
+
+  // YAML frontmatter
+  lines.push(`title: "${(reading.title || '').replace(/"/g, '\\"')}"`);
+  if (reading.author) lines.push(`author: "${reading.author.replace(/"/g, '\\"')}"`);
+  if (reading.tags?.length) lines.push(`tags: [${reading.tags.map(t => `"${t}"`).join(', ')}]`);
+  if (reading.url) lines.push(`url: "${reading.url}"`);
+  if (reading.estPages) lines.push(`pages: ${reading.estPages}`);
+  lines.push(`created: "${reading.createdAt || ''}"`);
+  lines.push(`updated: "${reading.updatedAt || ''}"`);
+  lines.push('---');
+  lines.push('');
+
+  // Title
+  lines.push(`# ${reading.title || 'Untitled'}`);
+  lines.push('');
+
+  // Notes
+  if (reading.notes) {
+    lines.push('## Notes');
+    lines.push('');
+    lines.push(reading.notes);
+    lines.push('');
+  }
+
+  // Reading log
+  if (reading.readingLog && Object.keys(reading.readingLog).length) {
+    lines.push('## Reading Log');
+    lines.push('');
+    const sortedDates = Object.keys(reading.readingLog).sort();
+    for (const date of sortedDates) {
+      lines.push(`- ${date}: ${reading.readingLog[date]} pages`);
+    }
+    lines.push('');
+  }
+
+  // Highlights
+  if (highlights?.length) {
+    lines.push('## Highlights');
+    lines.push('');
+
+    const sorted = [...highlights].sort((a, b) =>
+      (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || (a.startOffset ?? 0) - (b.startOffset ?? 0)
+    );
+
+    for (const h of sorted) {
+      lines.push(`> ${h.text}`);
+      if (h.latex) lines.push(`> **LaTeX:** \`${h.latex}\``);
+      if (h.comment) lines.push(`> — *${h.comment}*`);
+      const meta = [];
+      if (h.pageIndex !== undefined) meta.push(`Page ${h.pageIndex + 1}`);
+      if (h.color && h.color !== 'orange') meta.push(h.color);
+      if (meta.length) lines.push(`> *(${meta.join(', ')})*`);
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+async function pushMarkdownFile(ghToken, ghOwner, ghRepo, dir, filename, content, shaCache) {
+  const filePath = dir ? `${dir.replace(/\/+$/, '')}/${filename}` : filename;
+  const encoded = btoa(unescape(encodeURIComponent(content)));
+  const body = {
+    message: `update ${filename} ${new Date().toISOString().slice(0, 10)}`,
+    content: encoded
+  };
+
+  // Use cached SHA if available
+  const cachedSha = shaCache[filePath];
+  if (cachedSha) body.sha = cachedSha;
+
+  try {
+    let res = await fetch(
+      `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${filePath}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${ghToken}`,
+          Accept: 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+      }
+    );
+
+    // SHA conflict — fetch fresh SHA and retry
+    if (res.status === 409 || res.status === 422) {
+      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, filePath);
+      if (existing?.sha) {
+        body.sha = existing.sha;
+        res = await fetch(
+          `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${filePath}`,
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${ghToken}`,
+              Accept: 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          }
+        );
+      }
+    }
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.content?.sha || null;
+  } catch (e) {
+    console.error('pushMarkdownFile:', e);
+    return null;
+  }
+}
+
+async function syncMarkdownNotes(ghToken, ghOwner, ghRepo, ghNotesDir, changedKeys, readings, allHighlights) {
+  // Load SHA cache
+  const { ocMarkdownShas = {} } = await chrome.storage.local.get('ocMarkdownShas');
+  let pushed = 0, failed = 0;
+
+  for (const key of changedKeys) {
+    const reading = readings[key];
+    if (!reading) continue;
+
+    const filename = makeMarkdownFilename(reading, key);
+    const content = buildMarkdownContent(key, reading, allHighlights[key] || []);
+    const newSha = await pushMarkdownFile(ghToken, ghOwner, ghRepo, ghNotesDir, filename, content, ocMarkdownShas);
+
+    if (newSha) {
+      const filePath = ghNotesDir ? `${ghNotesDir.replace(/\/+$/, '')}/${filename}` : filename;
+      ocMarkdownShas[filePath] = newSha;
+      pushed++;
+    } else {
+      failed++;
+    }
+  }
+
+  // Save updated SHA cache
+  await chrome.storage.local.set({ ocMarkdownShas });
+  return { pushed, failed };
+}
+
 // ── syncReadings() — replaces flushOutbox() ─────────────────────────
 async function syncReadings() {
-  const { botToken, chatId, ghToken, ghOwner, ghRepo, ghPath } =
-    await chrome.storage.sync.get(['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath']);
+  const { botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir } =
+    await chrome.storage.sync.get(['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir']);
 
   const hasGitHub = ghToken && ghOwner && ghRepo;
   const hasTelegram = botToken && chatId;
@@ -481,6 +803,22 @@ async function syncReadings() {
         githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, fresh.sha);
       }
     }
+  }
+
+  // Phase 1.5: Markdown notes sync (Obsidian-compatible)
+  if (hasGitHub && ghNotesDir) {
+    try {
+      await syncMarkdownNotes(ghToken, ghOwner, ghRepo, ghNotesDir, changedKeys, readings, allHighlights);
+    } catch (e) {
+      console.error('Markdown notes sync failed:', e);
+      // Non-fatal: don't affect githubOk/telegramOk/syncedAt
+    }
+  }
+
+  // Phase 1.75: Auto-extract concepts if enabled (fire-and-forget)
+  const { autoExtract } = await chrome.storage.sync.get('autoExtract');
+  if (autoExtract && changedKeys.length > 0) {
+    extractConceptsBatch(changedKeys).catch(e => console.error('Auto-extract failed:', e));
   }
 
   // Phase 2: Telegram — send diff message for changed readings only

@@ -41,6 +41,7 @@
     <span class="nav-brand"><span class="nav-brand-icon">✦</span><span class="nav-brand-text">Marginalia</span></span>
     <a href="dashboard.html">Reading Log</a>
     <a href="library.html">Library</a>
+    <a href="graph.html">Knowledge Graph</a>
     <span class="nav-spacer"></span>
     <a href="options.html" class="active">Settings</a>
   </nav>
@@ -81,6 +82,25 @@
     <label>File Path</label>
     <input type="text" id="ghPath" placeholder="reading-log.json" />
     <div class="hint">Path within the repo (default: reading-log.json)</div>
+  </div>
+
+  <div class="field">
+    <label>Markdown Notes Directory</label>
+    <input type="text" id="ghNotesDir" placeholder="Marginalia/" />
+    <div class="hint">Folder for per-reading .md files (Obsidian-compatible). Leave empty to disable.</div>
+  </div>
+
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Knowledge Graph</h2>
+
+  <div class="field">
+    <label>Claude API Key</label>
+    <input type="password" id="claudeApiKey" placeholder="sk-ant-..." />
+    <div class="hint">Anthropic API key for concept extraction</div>
+  </div>
+
+  <div class="field" style="display:flex; align-items:center; gap:8px;">
+    <input type="checkbox" id="autoExtract" style="width:auto;" />
+    <label style="margin-bottom:0; text-transform:none; color:#e0e0e0; font-size:12px;">Auto-extract concepts on sync</label>
   </div>
 
   <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Auto-Sync</h2>

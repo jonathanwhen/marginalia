@@ -24,6 +24,11 @@ document.getElementById('open-library').addEventListener('click', e => {
   chrome.tabs.create({ url: chrome.runtime.getURL('library.html') });
 });
 
+document.getElementById('open-graph').addEventListener('click', e => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL('graph.html') });
+});
+
 // ── Tag selection ─────────────────────────────────────────────────
 function setupTags(containerId) {
   document.querySelectorAll(`#${containerId} .tag-btn`).forEach(btn => {
@@ -256,10 +261,11 @@ async function loadHighlights() {
   }
 
   list.innerHTML = highlights.map(h => `
-    <div class="hl-item" data-hl-id="${h.id}">
+    <div class="hl-item" data-hl-id="${escHtml(h.id)}">
       <div class="hl-item-content">
-        <div class="hl-quote">"${h.text.length > 100 ? h.text.slice(0, 100) + '\u2026' : h.text}"</div>
-        ${h.comment ? `<div class="hl-comment">${h.comment}</div>` : ''}
+        <div class="hl-quote">"${escHtml(h.text.length > 100 ? h.text.slice(0, 100) + '\u2026' : h.text)}"</div>
+        ${h.latex ? `<div class="hl-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
+        ${h.comment ? `<div class="hl-comment">${escHtml(h.comment)}</div>` : ''}
       </div>
       <button class="hl-delete" title="Remove highlight">\u00d7</button>
     </div>
@@ -403,6 +409,13 @@ window.addEventListener('pagehide', () => {
     });
   } catch (e) {}
 });
+
+// ── Utility ──────────────────────────────────────────────────────
+function escHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
 
 // ── Init ──────────────────────────────────────────────────────────
 autofill();

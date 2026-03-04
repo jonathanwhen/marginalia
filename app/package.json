@@ -1,0 +1,13 @@
+{
+  "name": "marginalia",
+  "version": "2.1.0",
+  "description": "Marginalia — Reading tracker and annotation tool",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  }
+}

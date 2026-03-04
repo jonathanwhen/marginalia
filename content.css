@@ -104,6 +104,17 @@
   font-size: 11px;
 }
 #oc-note-bubble .oc-nb-comment { color: #aaa; font-size: 12px; margin-bottom: 4px; }
+#oc-note-bubble .oc-nb-latex { margin: 4px 0; }
+#oc-note-bubble .oc-nb-latex code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  background: #1a1a1a;
+  color: #6fcf97;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+  word-break: break-all;
+}
 #oc-note-bubble .oc-nb-actions {
   display: flex;
   justify-content: space-between;
@@ -328,6 +339,21 @@
   color: #888;
   padding-left: 10px;
   margin-top: 2px;
+}
+#oc-sidebar .oc-sb-hl-latex {
+  margin: 3px 0 3px 10px;
+}
+#oc-sidebar .oc-sb-hl-latex code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 10px;
+  background: #1a1a1a;
+  color: #6fcf97;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  word-break: break-all;
 }
 #oc-sidebar .oc-sb-hl-empty {
   color: #444;

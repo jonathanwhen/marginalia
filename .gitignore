@@ -1,0 +1,7 @@
+TODO.md
+node_modules/
+dist-firefox/
+app/node_modules/
+app/dist/
+app/out/
+*.dmg

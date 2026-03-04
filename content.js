@@ -16,6 +16,13 @@
   const pageKey = () => location.origin + location.pathname;
   const isPdf = document.contentType === 'application/pdf' || location.pathname.toLowerCase().endsWith('.pdf');
 
+  // ── HTML escaping ──────────────────────────────────────────────────
+  function escHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
   // ── Storage helpers ──────────────────────────────────────────────
   function isContextValid() {
     try { return !!chrome.runtime?.id; } catch { return false; }
@@ -51,17 +58,201 @@
   }
 
   function injectHighlight(h) {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      const idx = node.nodeValue.indexOf(h.text);
-      if (idx === -1) continue;
-      const range = document.createRange();
-      range.setStart(node, idx);
-      range.setEnd(node, idx + h.text.length);
-      wrapRange(range, h);
-      break;
+    // Primary: anchor-based restoration (CSS selector + text offset + prefix/suffix verification)
+    if (h.anchor) {
+      const range = restoreFromAnchor(h.anchor, h.text);
+      if (range) { wrapRange(range, h); return; }
     }
+
+    // Fallback: whitespace-normalized text search
+    const normalizedTarget = h.text.replace(/\s+/g, ' ');
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node, accumulated = '', nodes = [];
+    while ((node = walker.nextNode())) {
+      nodes.push({ node, start: accumulated.length });
+      accumulated += node.nodeValue;
+    }
+
+    const normalizedAccum = accumulated.replace(/\s+/g, ' ');
+    const idx = normalizedAccum.indexOf(normalizedTarget);
+    if (idx === -1) return;
+
+    // Map normalized index back to original text positions
+    let origIdx = mapNormalizedToOriginal(accumulated, idx);
+    let origEnd = mapNormalizedToOriginal(accumulated, idx + normalizedTarget.length);
+
+    // Find the text nodes that contain the start and end positions
+    let startNode = null, startOff = 0, endNode = null, endOff = 0;
+    for (const { node: n, start } of nodes) {
+      const nEnd = start + n.nodeValue.length;
+      if (startNode === null && origIdx < nEnd) {
+        startNode = n;
+        startOff = origIdx - start;
+      }
+      if (origEnd <= nEnd) {
+        endNode = n;
+        endOff = origEnd - start;
+        break;
+      }
+    }
+    if (!startNode || !endNode) return;
+
+    const range = document.createRange();
+    range.setStart(startNode, startOff);
+    range.setEnd(endNode, endOff);
+    wrapRange(range, h);
+  }
+
+  // Map a character index in whitespace-normalized text back to original text
+  function mapNormalizedToOriginal(original, normalizedIdx) {
+    let ni = 0, oi = 0, inSpace = false;
+    while (oi < original.length && ni < normalizedIdx) {
+      if (/\s/.test(original[oi])) {
+        if (!inSpace) { ni++; inSpace = true; }
+        oi++;
+      } else {
+        ni++;
+        oi++;
+        inSpace = false;
+      }
+    }
+    return oi;
+  }
+
+  // Restore a highlight range from its anchor data
+  function restoreFromAnchor(anchor, text) {
+    try {
+      const { cssSelector, textOffset, prefix, suffix } = anchor;
+      const ancestor = document.querySelector(cssSelector);
+      if (!ancestor) return null;
+
+      // Walk text nodes within ancestor to find the offset
+      const walker = document.createTreeWalker(ancestor, NodeFilter.SHOW_TEXT);
+      let node, pos = 0, startNode = null, startOff = 0, endNode = null, endOff = 0;
+      while ((node = walker.nextNode())) {
+        const len = node.nodeValue.length;
+        if (startNode === null && pos + len > textOffset) {
+          startNode = node;
+          startOff = textOffset - pos;
+        }
+        if (pos + len >= textOffset + text.length) {
+          endNode = node;
+          endOff = textOffset + text.length - pos;
+          break;
+        }
+        pos += len;
+      }
+      if (!startNode || !endNode) return null;
+
+      // Verify with prefix/suffix context
+      const range = document.createRange();
+      range.setStart(startNode, startOff);
+      range.setEnd(endNode, endOff);
+      const rangeText = range.toString();
+
+      // Verify the range text matches (allowing whitespace differences)
+      if (rangeText.replace(/\s+/g, ' ') !== text.replace(/\s+/g, ' ')) return null;
+
+      // Verify prefix/suffix context if present
+      if (prefix) {
+        const fullText = ancestor.textContent;
+        const rangeStart = textOffset;
+        const contextBefore = fullText.slice(Math.max(0, rangeStart - prefix.length), rangeStart);
+        if (!contextBefore.endsWith(prefix)) return null;
+      }
+      if (suffix) {
+        const fullText = ancestor.textContent;
+        const rangeEnd = textOffset + text.length;
+        const contextAfter = fullText.slice(rangeEnd, rangeEnd + suffix.length);
+        if (!contextAfter.startsWith(suffix)) return null;
+      }
+
+      return range;
+    } catch {
+      return null;
+    }
+  }
+
+  // Compute anchor data for a highlight selection
+  function computeAnchor(range, text) {
+    try {
+      // Find a good ancestor element with a CSS selector
+      let ancestor = range.commonAncestorContainer;
+      if (ancestor.nodeType === Node.TEXT_NODE) ancestor = ancestor.parentElement;
+
+      // Walk up to find an element with an id or unique selector
+      let target = ancestor;
+      let cssSelector = null;
+      while (target && target !== document.body) {
+        if (target.id) {
+          cssSelector = `#${CSS.escape(target.id)}`;
+          break;
+        }
+        // Try tag + nth-child for specificity
+        const parent = target.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children).filter(c => c.tagName === target.tagName);
+          const idx = siblings.indexOf(target) + 1;
+          const parentSel = getCssPath(parent);
+          if (parentSel) {
+            cssSelector = `${parentSel} > ${target.tagName.toLowerCase()}:nth-of-type(${idx})`;
+            break;
+          }
+        }
+        target = parent;
+      }
+
+      if (!cssSelector) {
+        cssSelector = getCssPath(ancestor);
+      }
+      if (!cssSelector) return null;
+
+      // Compute text offset within the ancestor
+      const resolvedAncestor = document.querySelector(cssSelector);
+      if (!resolvedAncestor) return null;
+
+      const walker = document.createTreeWalker(resolvedAncestor, NodeFilter.SHOW_TEXT);
+      let node, textOffset = 0, found = false;
+      while ((node = walker.nextNode())) {
+        if (node === range.startContainer) {
+          textOffset += range.startOffset;
+          found = true;
+          break;
+        }
+        textOffset += node.nodeValue.length;
+      }
+      if (!found) return null;
+
+      // Extract prefix/suffix context (up to 32 chars)
+      const fullText = resolvedAncestor.textContent;
+      const prefix = fullText.slice(Math.max(0, textOffset - 32), textOffset);
+      const suffix = fullText.slice(textOffset + text.length, textOffset + text.length + 32);
+
+      return { cssSelector, textOffset, prefix, suffix };
+    } catch {
+      return null;
+    }
+  }
+
+  // Build a CSS selector path for an element
+  function getCssPath(el) {
+    if (!el || el === document.body) return 'body';
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const parts = [];
+    let current = el;
+    for (let i = 0; i < 5 && current && current !== document.body; i++) {
+      if (current.id) {
+        parts.unshift(`#${CSS.escape(current.id)}`);
+        break;
+      }
+      const parent = current.parentElement;
+      if (!parent) break;
+      const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
+      const idx = siblings.indexOf(current) + 1;
+      parts.unshift(`${current.tagName.toLowerCase()}:nth-of-type(${idx})`);
+      current = parent;
+    }
+    return parts.join(' > ') || null;
   }
 
   // Returns the first created <mark> element (or null on failure)
@@ -285,10 +476,11 @@
     noteBubble = document.createElement('div');
     noteBubble.id = 'oc-note-bubble';
     noteBubble.innerHTML = `
-      <div class="oc-nb-quote">${h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text}</div>
-      ${hasComment ? `<div class="oc-nb-comment">${h.comment}</div>` : ''}
+      <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text)}</div>
+      ${h.latex ? `<div class="oc-nb-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
+      ${hasComment ? `<div class="oc-nb-comment">${escHtml(h.comment)}</div>` : ''}
       <div class="oc-nb-edit-section" style="display:none;">
-        <textarea class="oc-nb-edit-input" placeholder="Add a note...">${h.comment || ''}</textarea>
+        <textarea class="oc-nb-edit-input" placeholder="Add a note...">${escHtml(h.comment || '')}</textarea>
         <div class="oc-nb-edit-actions">
           <button class="oc-nb-edit-save">Save</button>
           <button class="oc-nb-edit-cancel">Cancel</button>
@@ -352,6 +544,99 @@
     });
   }
 
+  // ── Math detection on web pages ──────────────────────────────────
+  function extractMathFromSelection(range) {
+    const container = range.commonAncestorContainer;
+    const root = container.nodeType === Node.TEXT_NODE ? container.parentElement : container;
+    if (!root) return null;
+
+    const latex = [];
+    const mathElements = [];
+
+    // Expand search to include ancestors that may contain the math context
+    const searchRoot = root.closest?.('.katex, .MathJax, .MathJax_Display, mjx-container, [data-mathml]') || root;
+
+    // KaTeX: .katex elements contain annotation[encoding="application/x-tex"]
+    searchRoot.querySelectorAll?.('.katex')?.forEach(el => {
+      if (!range.intersectsNode(el)) return;
+      const ann = el.querySelector('annotation[encoding="application/x-tex"]');
+      if (ann?.textContent) {
+        latex.push(ann.textContent.trim());
+        mathElements.push({ type: 'katex', source: ann.textContent.trim() });
+      }
+    });
+
+    // Also check ancestors for KaTeX
+    if (!latex.length) {
+      const katexParent = root.closest?.('.katex');
+      if (katexParent) {
+        const ann = katexParent.querySelector('annotation[encoding="application/x-tex"]');
+        if (ann?.textContent) {
+          latex.push(ann.textContent.trim());
+          mathElements.push({ type: 'katex', source: ann.textContent.trim() });
+        }
+      }
+    }
+
+    // MathJax v2: script[type*="math/tex"] siblings of .MathJax elements
+    searchRoot.querySelectorAll?.('.MathJax')?.forEach(el => {
+      if (!range.intersectsNode(el)) return;
+      const script = el.previousElementSibling;
+      if (script?.tagName === 'SCRIPT' && script.type?.includes('math/tex')) {
+        latex.push(script.textContent.trim());
+        mathElements.push({ type: 'mathjax-v2', source: script.textContent.trim() });
+      }
+    });
+
+    // MathJax v3: mjx-container elements
+    searchRoot.querySelectorAll?.('mjx-container')?.forEach(el => {
+      if (!range.intersectsNode(el)) return;
+      // MathJax v3 stores original TeX in an attribute or assistive MathML
+      const texAttr = el.getAttribute('data-mjx-texcode');
+      if (texAttr) {
+        latex.push(texAttr);
+        mathElements.push({ type: 'mathjax-v3', source: texAttr });
+      }
+      // Try assistive MathML annotation
+      const ann = el.querySelector('annotation[encoding="application/x-tex"]');
+      if (ann?.textContent && !texAttr) {
+        latex.push(ann.textContent.trim());
+        mathElements.push({ type: 'mathjax-v3', source: ann.textContent.trim() });
+      }
+    });
+
+    // Also check ancestors for MathJax v3
+    if (!latex.length) {
+      const mjxParent = root.closest?.('mjx-container');
+      if (mjxParent) {
+        const ann = mjxParent.querySelector('annotation[encoding="application/x-tex"]');
+        if (ann?.textContent) {
+          latex.push(ann.textContent.trim());
+          mathElements.push({ type: 'mathjax-v3', source: ann.textContent.trim() });
+        }
+      }
+    }
+
+    // MathML: <math> elements with <annotation> or raw MathML
+    searchRoot.querySelectorAll?.('math')?.forEach(el => {
+      if (!range.intersectsNode(el)) return;
+      const ann = el.querySelector('annotation[encoding="application/x-tex"]');
+      if (ann?.textContent) {
+        latex.push(ann.textContent.trim());
+        mathElements.push({ type: 'mathml', source: ann.textContent.trim() });
+      } else {
+        // Store raw MathML as fallback
+        mathElements.push({ type: 'mathml-raw', source: el.outerHTML });
+      }
+    });
+
+    if (!latex.length && !mathElements.length) return null;
+    return {
+      latex: latex.join('\n') || undefined,
+      mathElements: mathElements.length ? mathElements : undefined
+    };
+  }
+
   // ── Save / delete highlights ───────────────────────────────────
   let lastSavedText = '';
   let lastSavedTime = 0;
@@ -361,11 +646,16 @@
     const now = Date.now();
     if (text === lastSavedText && now - lastSavedTime < 2000) return;
 
+    const anchor = computeAnchor(range, text);
+    const mathData = extractMathFromSelection(range);
     const h = {
-      id: now.toString(),
+      id: crypto.randomUUID(),
       text,
       comment,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      ...(anchor ? { anchor } : {}),
+      ...(mathData?.latex ? { latex: mathData.latex } : {}),
+      ...(mathData?.mathElements ? { mathElements: mathData.mathElements } : {})
     };
 
     // Wrap in DOM first — only persist if the visual highlight succeeds
@@ -574,8 +864,9 @@
 
       listEl.innerHTML = highlights.map(h => `
         <div class="oc-sb-hl-item">
-          <div class="oc-sb-hl-quote">"${h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text}"</div>
-          ${h.comment ? `<div class="oc-sb-hl-comment">— ${h.comment}</div>` : ''}
+          <div class="oc-sb-hl-quote">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text)}"</div>
+          ${h.latex ? `<div class="oc-sb-hl-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
+          ${h.comment ? `<div class="oc-sb-hl-comment">— ${escHtml(h.comment)}</div>` : ''}
         </div>
       `).join('');
     });

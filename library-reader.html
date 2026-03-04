@@ -4,12 +4,14 @@
   <meta charset="utf-8">
   <title>Marginalia — Reader</title>
   <link rel="stylesheet" href="library-reader.css">
+  <link rel="stylesheet" href="lib/katex.min.css">
 </head>
 <body>
   <nav class="page-nav">
     <span class="nav-brand"><span class="nav-brand-icon">✦</span><span class="nav-brand-text">Marginalia</span></span>
     <a href="dashboard.html">Reading Log</a>
     <a href="library.html" class="active">Library</a>
+    <a href="graph.html">Knowledge Graph</a>
     <span class="nav-spacer"></span>
     <a href="options.html">Settings</a>
   </nav>
@@ -61,10 +63,17 @@
     <div class="reader-sidebar hidden" id="sidebar">
       <div class="sb-header">
         <span class="sb-label">Notes</span>
+        <div class="sb-tabs">
+          <button class="sb-tab active" data-tab="edit">Edit</button>
+          <button class="sb-tab" data-tab="preview">Preview</button>
+        </div>
         <button class="sb-close" id="sb-close" title="Close (Esc)">&times;</button>
       </div>
       <div class="sb-body">
-        <textarea class="sb-textarea" id="sb-notes" placeholder="Key takeaways, thoughts, or insights..."></textarea>
+        <div class="sb-edit-pane" id="sb-edit-pane">
+          <textarea class="sb-textarea" id="sb-notes" placeholder="Key takeaways, thoughts, or insights... (supports Markdown and $LaTeX$)"></textarea>
+        </div>
+        <div class="sb-preview-pane hidden" id="sb-preview-pane"></div>
         <div class="sb-status" id="sb-status"></div>
         <div class="sb-divider"></div>
         <div class="sb-hl-header" id="sb-hl-header">Highlights (0)</div>
@@ -101,6 +110,9 @@
   <!-- Toast notification -->
   <div class="toast hidden" id="toast"></div>
 
+  <script src="lib/marked.min.js"></script>
+  <script src="lib/dompurify.min.js"></script>
+  <script src="lib/katex.min.js"></script>
   <script type="module" src="library-reader.js"></script>
 </body>
 </html>

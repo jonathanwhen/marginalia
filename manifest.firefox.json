@@ -3,6 +3,12 @@
   "name": "Marginalia",
   "version": "2.1",
   "description": "Reading tracker and annotation tool",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "marginalia@jwen",
+      "strict_min_version": "109.0"
+    }
+  },
   "permissions": ["storage", "contextMenus", "activeTab", "tabs", "scripting", "alarms", "webNavigation"],
   "host_permissions": ["https://api.telegram.org/*", "https://api.github.com/*", "https://api.anthropic.com/*", "<all_urls>"],
   "icons": {
@@ -19,7 +25,7 @@
     }
   },
   "background": {
-    "service_worker": "background.js",
+    "scripts": ["background.js"],
     "type": "module"
   },
   "content_scripts": [

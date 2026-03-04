@@ -1,13 +1,16 @@
 // Load saved settings
 chrome.storage.sync.get(
-  ['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath'],
-  ({ botToken, chatId, ghToken, ghOwner, ghRepo, ghPath }) => {
+  ['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir', 'claudeApiKey', 'autoExtract'],
+  ({ botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir, claudeApiKey, autoExtract }) => {
     if (botToken) document.getElementById('botToken').value = botToken;
     if (chatId) document.getElementById('chatId').value = chatId;
     if (ghToken) document.getElementById('ghToken').value = ghToken;
     if (ghOwner) document.getElementById('ghOwner').value = ghOwner;
     if (ghRepo) document.getElementById('ghRepo').value = ghRepo;
     if (ghPath) document.getElementById('ghPath').value = ghPath;
+    if (ghNotesDir) document.getElementById('ghNotesDir').value = ghNotesDir;
+    if (claudeApiKey) document.getElementById('claudeApiKey').value = claudeApiKey;
+    if (autoExtract) document.getElementById('autoExtract').checked = autoExtract;
   }
 );
 chrome.storage.local.get('ocFlushIntervalMinutes', ({ ocFlushIntervalMinutes }) => {
@@ -21,9 +24,12 @@ document.getElementById('save').addEventListener('click', () => {
   const ghOwner = document.getElementById('ghOwner').value.trim();
   const ghRepo = document.getElementById('ghRepo').value.trim();
   const ghPath = document.getElementById('ghPath').value.trim() || 'reading-log.json';
+  const ghNotesDir = document.getElementById('ghNotesDir').value.trim();
+  const claudeApiKey = document.getElementById('claudeApiKey').value.trim();
+  const autoExtract = document.getElementById('autoExtract').checked;
   const flushInterval = parseInt(document.getElementById('flushInterval').value, 10) || 60;
 
-  chrome.storage.sync.set({ botToken, chatId, ghToken, ghOwner, ghRepo, ghPath });
+  chrome.storage.sync.set({ botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir, claudeApiKey, autoExtract });
   chrome.storage.local.set({ ocFlushIntervalMinutes: flushInterval }, () => {
     // Tell background to reconfigure the alarm with the new interval
     chrome.runtime.sendMessage({ type: 'oc-reset-alarm', intervalMinutes: flushInterval });
