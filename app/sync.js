@@ -96,7 +96,7 @@ function getTodayPages() {
 }
 
 // ── GitHub sync ──────────────────────────────────────────────────────
-async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath) {
+async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath, { withContent = false } = {}) {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${ghPath}`,
@@ -105,11 +105,76 @@ async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath) {
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`GitHub GET ${res.status}`);
     const data = await res.json();
-    return { sha: data.sha };
+    const result = { sha: data.sha };
+    if (withContent && data.content) {
+      result.content = Buffer.from(data.content, 'base64').toString('utf8');
+    }
+    return result;
   } catch (e) {
     console.error('githubGetFile:', e);
     return null;
   }
+}
+
+// ── Bidirectional merge ─────────────────────────────────────────────
+// Pull remote reading-log.json from GitHub and merge into local storage.
+// Strategy: last-write-wins by updatedAt, union highlights by ID.
+async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
+  const file = await githubGetFile(ghToken, ghOwner, ghRepo, ghPath, { withContent: true });
+  if (!file?.content) return { merged: 0, sha: file?.sha || null };
+
+  let payload;
+  try { payload = JSON.parse(file.content); } catch { return { merged: 0, sha: file.sha }; }
+  if (!payload.readings) return { merged: 0, sha: file.sha };
+
+  const localReadings = getReadings();
+  let merged = 0;
+
+  for (const [pageKey, remote] of Object.entries(payload.readings)) {
+    const local = localReadings[pageKey];
+
+    if (!local) {
+      const now = new Date().toISOString();
+      localReadings[pageKey] = {
+        title: remote.title || '', author: remote.author || '',
+        url: remote.url || pageKey, tags: remote.tags || [],
+        notes: remote.notes || '', estPages: remote.estPages || 0,
+        createdAt: remote.createdAt || now, updatedAt: remote.updatedAt || now,
+        syncedAt: remote.updatedAt || now,
+        ...(remote.readingLog ? { readingLog: remote.readingLog } : {})
+      };
+      merged++;
+    } else if (remote.updatedAt && remote.updatedAt > (local.updatedAt || '')) {
+      localReadings[pageKey] = {
+        title: remote.title || local.title,
+        author: remote.author || local.author,
+        url: remote.url || local.url,
+        tags: remote.tags || local.tags,
+        notes: remote.notes || local.notes,
+        estPages: remote.estPages || local.estPages,
+        createdAt: remote.createdAt || local.createdAt,
+        updatedAt: remote.updatedAt,
+        syncedAt: remote.updatedAt,
+        ...(remote.readingLog || local.readingLog
+          ? { readingLog: { ...local.readingLog, ...remote.readingLog } }
+          : {})
+      };
+      merged++;
+    }
+
+    // Merge highlights by ID (union)
+    if (remote.highlights?.length) {
+      const localHls = storage.get('local', [pageKey])[pageKey] || [];
+      const localIds = new Set(localHls.map(h => h.id));
+      const newHls = remote.highlights.filter(h => !localIds.has(h.id));
+      if (newHls.length > 0) {
+        storage.set('local', { [pageKey]: [...localHls, ...newHls] });
+      }
+    }
+  }
+
+  saveReadings(localReadings);
+  return { merged, sha: file.sha };
 }
 
 async function githubPushFile(ghToken, ghOwner, ghRepo, ghPath, content, sha) {
@@ -154,10 +219,27 @@ async function syncReadings() {
     return { synced: 0, failed: 0, error: 'No sync channels configured' };
   }
 
+  const syncPath = ghPath || 'reading-log.json';
+  let githubOk = true;
+  let telegramOk = true;
+
+  // Phase 0: Pull from GitHub and merge remote changes into local
+  if (hasGitHub) {
+    try {
+      const mergeResult = await mergeFromRemote(ghToken, ghOwner, ghRepo, syncPath);
+      if (mergeResult.merged > 0) {
+        console.log(`Merged ${mergeResult.merged} reading(s) from GitHub`);
+      }
+    } catch (e) {
+      console.error('Pull/merge from GitHub failed:', e);
+    }
+  }
+
+  // Re-read after merge (local data may have changed)
   const readings = getReadings();
   const allKeys = Object.keys(readings);
   const changedKeys = allKeys.filter(k => needsSync(readings[k]));
-  if (changedKeys.length === 0) return { synced: 0, failed: 0 };
+  if (changedKeys.length === 0 && !hasGitHub) return { synced: 0, failed: 0 };
 
   // Batch-fetch highlights
   const allHighlights = {};
@@ -166,12 +248,8 @@ async function syncReadings() {
     allHighlights[k] = data[k] || [];
   }
 
-  let githubOk = true;
-  let telegramOk = true;
-
-  // GitHub phase
+  // GitHub phase: push full export
   if (hasGitHub) {
-    const path = ghPath || 'reading-log.json';
     const exportPayload = { version: 1, exportedAt: new Date().toISOString(), readings: {} };
 
     for (const [key, reading] of Object.entries(readings)) {
@@ -188,14 +266,14 @@ async function syncReadings() {
     const { ocGitHubSha } = storage.get('local', ['ocGitHubSha']);
     let sha = ocGitHubSha || null;
     if (!sha) {
-      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, path);
+      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, syncPath);
       sha = existing?.sha || null;
     }
 
-    githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, sha);
+    githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, syncPath, content, sha);
     if (!githubOk && sha) {
-      const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, path);
-      if (fresh?.sha) githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, fresh.sha);
+      const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, syncPath);
+      if (fresh?.sha) githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, syncPath, content, fresh.sha);
     }
   }
 
@@ -256,6 +334,26 @@ async function telegramSend(botToken, chatId, text) {
   }
 }
 
+// ── Restore from GitHub ──────────────────────────────────────────────
+async function restoreFromGitHub() {
+  const { ghToken, ghOwner, ghRepo, ghPath } = storage.get('sync',
+    ['ghToken', 'ghOwner', 'ghRepo', 'ghPath']);
+
+  if (!ghToken || !ghOwner || !ghRepo) {
+    return { error: 'GitHub sync not configured — set it up in Settings first' };
+  }
+
+  const syncPath = ghPath || 'reading-log.json';
+  try {
+    const result = await mergeFromRemote(ghToken, ghOwner, ghRepo, syncPath);
+    const readings = getReadings();
+    const total = Object.keys(readings).length;
+    return { ok: true, restored: result.merged, total };
+  } catch (e) {
+    return { error: `Restore failed: ${e.message}` };
+  }
+}
+
 // ── Message router ───────────────────────────────────────────────────
 function handleMessage(msg) {
   switch (msg.type) {
@@ -271,6 +369,8 @@ function handleMessage(msg) {
     case 'oc-log-pages': return logPages(msg.pageKey, msg.date, msg.pages);
     case 'oc-get-today-pages': return getTodayPages();
     case 'oc-flush': return syncReadings();
+    case 'oc-restore-from-github': return restoreFromGitHub();
+    case 'oc-reset-alarm': return { ok: true }; // no-op in Electron (uses setInterval)
     default: return { error: `Unknown message type: ${msg.type}` };
   }
 }

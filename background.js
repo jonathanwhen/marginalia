@@ -339,7 +339,7 @@ chrome.alarms.onAlarm.addListener(alarm => {
 
 // GET the file to retrieve its SHA (needed for updates)
 // Returns { sha, content } or null if 404
-async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath) {
+async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath, { withContent = false } = {}) {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${ghOwner}/${ghRepo}/contents/${ghPath}`,
@@ -348,11 +348,93 @@ async function githubGetFile(ghToken, ghOwner, ghRepo, ghPath) {
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`GitHub GET ${res.status}`);
     const data = await res.json();
-    return { sha: data.sha };
+    const result = { sha: data.sha };
+    if (withContent && data.content) {
+      result.content = decodeURIComponent(escape(atob(data.content.replace(/\n/g, ''))));
+    }
+    return result;
   } catch (e) {
     console.error('githubGetFile:', e);
     return null;
   }
+}
+
+// ── Bidirectional merge ─────────────────────────────────────────────
+// Merges remote readings + highlights into local storage.
+// Strategy: last-write-wins by updatedAt, union highlights by ID.
+async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
+  const file = await githubGetFile(ghToken, ghOwner, ghRepo, ghPath, { withContent: true });
+  if (!file?.content) return { merged: 0, sha: file?.sha || null };
+
+  let payload;
+  try { payload = JSON.parse(file.content); } catch { return { merged: 0, sha: file.sha }; }
+  if (!payload.readings) return { merged: 0, sha: file.sha };
+
+  const localReadings = await getReadings();
+  let merged = 0;
+
+  const highlightsToMerge = {};
+
+  for (const [pageKey, remote] of Object.entries(payload.readings)) {
+    const local = localReadings[pageKey];
+
+    if (!local) {
+      // New reading from remote — adopt it
+      const now = new Date().toISOString();
+      localReadings[pageKey] = {
+        title: remote.title || '', author: remote.author || '',
+        url: remote.url || pageKey, tags: remote.tags || [],
+        notes: remote.notes || '', estPages: remote.estPages || 0,
+        createdAt: remote.createdAt || now, updatedAt: remote.updatedAt || now,
+        syncedAt: remote.updatedAt || now,
+        ...(remote.readingLog ? { readingLog: remote.readingLog } : {})
+      };
+      merged++;
+    } else if (remote.updatedAt && remote.updatedAt > (local.updatedAt || '')) {
+      // Remote is newer — take remote fields, preserve local syncedAt
+      localReadings[pageKey] = {
+        title: remote.title || local.title,
+        author: remote.author || local.author,
+        url: remote.url || local.url,
+        tags: remote.tags || local.tags,
+        notes: remote.notes || local.notes,
+        estPages: remote.estPages || local.estPages,
+        createdAt: remote.createdAt || local.createdAt,
+        updatedAt: remote.updatedAt,
+        syncedAt: remote.updatedAt,
+        ...(remote.readingLog || local.readingLog
+          ? { readingLog: { ...local.readingLog, ...remote.readingLog } }
+          : {})
+      };
+      merged++;
+    }
+
+    // Merge highlights by ID (union)
+    if (remote.highlights?.length) {
+      highlightsToMerge[pageKey] = remote.highlights;
+    }
+  }
+
+  await saveReadings(localReadings);
+
+  // Merge highlights
+  if (Object.keys(highlightsToMerge).length) {
+    const existingHl = await chrome.storage.local.get(Object.keys(highlightsToMerge));
+    const toWrite = {};
+    for (const [key, remoteHls] of Object.entries(highlightsToMerge)) {
+      const localHls = existingHl[key] || [];
+      const localIds = new Set(localHls.map(h => h.id));
+      const newHls = remoteHls.filter(h => !localIds.has(h.id));
+      if (newHls.length > 0) {
+        toWrite[key] = [...localHls, ...newHls];
+      }
+    }
+    if (Object.keys(toWrite).length) {
+      await chrome.storage.local.set(toWrite);
+    }
+  }
+
+  return { merged, sha: file.sha };
 }
 
 // PUT the file (create if no SHA, update if SHA provided)
@@ -739,12 +821,30 @@ async function syncReadings() {
     return { synced: 0, failed: 0, error: 'No sync channels configured' };
   }
 
+  const syncPath = ghPath || 'reading-log.json';
+  let githubOk = true;
+  let telegramOk = true;
+
+  // Phase 0: Pull from GitHub and merge remote changes into local
+  if (hasGitHub) {
+    try {
+      const mergeResult = await mergeFromRemote(ghToken, ghOwner, ghRepo, syncPath);
+      if (mergeResult.merged > 0) {
+        console.log(`Merged ${mergeResult.merged} reading(s) from GitHub`);
+      }
+    } catch (e) {
+      console.error('Pull/merge from GitHub failed:', e);
+      // Non-fatal: continue with push
+    }
+  }
+
+  // Re-read after merge (local data may have changed)
   const readings = await getReadings();
   const allKeys = Object.keys(readings);
 
   // Identify readings that need sync
   const changedKeys = allKeys.filter(k => needsSync(readings[k]));
-  if (changedKeys.length === 0) {
+  if (changedKeys.length === 0 && !hasGitHub) {
     return { synced: 0, failed: 0 };
   }
 
@@ -757,12 +857,8 @@ async function syncReadings() {
     }
   }
 
-  let githubOk = true;
-  let telegramOk = true;
-
   // Phase 1: GitHub — push full export (all readings, not just changed)
   if (hasGitHub) {
-    const path = ghPath || 'reading-log.json';
     const exportPayload = {
       version: 1,
       exportedAt: new Date().toISOString(),
@@ -790,17 +886,17 @@ async function syncReadings() {
     const { ocGitHubSha } = await chrome.storage.local.get('ocGitHubSha');
     let sha = ocGitHubSha || null;
     if (!sha) {
-      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, path);
+      const existing = await githubGetFile(ghToken, ghOwner, ghRepo, syncPath);
       sha = existing?.sha || null;
     }
 
-    githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, sha);
+    githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, syncPath, content, sha);
 
     // SHA conflict retry: re-fetch fresh SHA and try once more
     if (!githubOk && sha) {
-      const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, path);
+      const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, syncPath);
       if (fresh?.sha) {
-        githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, path, content, fresh.sha);
+        githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, syncPath, content, fresh.sha);
       }
     }
   }
