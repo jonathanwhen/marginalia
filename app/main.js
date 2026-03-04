@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const storage = require('./storage');
 const sync = require('./sync');
+const libraryStorage = require('./library-storage');
 
 // Extension root — in dev: one level up from app/, in packaged: resources/ext/
 const EXT_ROOT = app.isPackaged
@@ -109,6 +110,36 @@ ipcMain.on('storage-set', (event, area, items) => {
 ipcMain.on('storage-remove', (event, area, keys) => {
   storage.remove(area, keys);
   event.returnValue = true;
+});
+
+// ── IPC: Library (file-based, replaces IndexedDB) ───────────────────
+
+ipcMain.handle('library-get-all-meta', () => {
+  return libraryStorage.getAllTranscriptsMeta();
+});
+
+ipcMain.handle('library-get', (_event, pageKey) => {
+  return libraryStorage.getTranscript(pageKey);
+});
+
+ipcMain.handle('library-put', (_event, transcript) => {
+  return libraryStorage.putTranscript(transcript);
+});
+
+ipcMain.handle('library-delete', (_event, pageKey) => {
+  return libraryStorage.deleteTranscript(pageKey);
+});
+
+ipcMain.handle('library-update-field', (_event, pageKey, field, value) => {
+  return libraryStorage.updateTranscriptField(pageKey, field, value);
+});
+
+ipcMain.handle('library-has', (_event, pageKey) => {
+  return libraryStorage.hasTranscript(pageKey);
+});
+
+ipcMain.handle('library-search', (_event, query) => {
+  return libraryStorage.searchTranscripts(query);
 });
 
 // ── IPC: Runtime ────────────────────────────────────────────────────

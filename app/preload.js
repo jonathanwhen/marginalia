@@ -126,6 +126,17 @@ contextBridge.exposeInMainWorld('__marginaliaChrome', {
   webNavigation: { onBeforeNavigate: { addListener() {} } }
 });
 
+// ── Library storage (file-based, replaces IndexedDB) ─────────────────
+contextBridge.exposeInMainWorld('__marginaliaLibrary', {
+  getAllTranscriptsMeta: () => ipcRenderer.invoke('library-get-all-meta'),
+  getTranscript: (pageKey) => ipcRenderer.invoke('library-get', pageKey),
+  putTranscript: (transcript) => ipcRenderer.invoke('library-put', transcript),
+  deleteTranscript: (pageKey) => ipcRenderer.invoke('library-delete', pageKey),
+  updateTranscriptField: (pageKey, field, value) => ipcRenderer.invoke('library-update-field', pageKey, field, value),
+  hasTranscript: (pageKey) => ipcRenderer.invoke('library-has', pageKey),
+  searchTranscripts: (query) => ipcRenderer.invoke('library-search', query)
+});
+
 // ── Remap to window.chrome in the main world ─────────────────────────
 // This runs before page scripts, overwriting the built-in chrome object.
 webFrame.executeJavaScript(`
