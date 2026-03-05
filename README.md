@@ -1,15 +1,29 @@
 # Marginalia
 
-A Chrome extension for tracking, annotating, and organizing your reading across the web and imported PDFs. Log what you read, highlight passages, take notes, and sync everything to Telegram and GitHub.
+A reading tracker, annotation tool, and knowledge platform — available as a Chrome extension and an Electron desktop app. Log what you read, highlight passages, take notes, share annotations with friends, and sync everything to GitHub and Telegram.
 
 ---
 
 ## Quick Start
 
-1. Load the extension in Chrome (`chrome://extensions` → Developer mode → Load unpacked → select this folder).
-2. Navigate to any article or page and click the Marginalia icon in the toolbar.
-3. The popup auto-fills the title, author, and estimated page count. Add tags if you want, then click **Log Reading**.
-4. To highlight text, switch to the **Highlights** tab in the popup and click **Start Highlighting**, or right-click selected text → **Highlight with Marginalia**.
+### Chrome Extension
+
+1. Clone this repo: `git clone https://github.com/jonathanwhen/marginalia.git`
+2. Open `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the repo folder.
+3. Click the Marginalia icon on any page to start logging and highlighting.
+
+### Electron App
+
+1. `cd app && npm install`
+2. `npm start` (or `npm run dev` for devtools)
+3. To build a DMG: `npm run dist`
+
+### Updating
+
+```
+git pull
+```
+Then reload the extension in `chrome://extensions` (click the reload arrow). For the Electron app, restart it.
 
 ---
 
@@ -41,6 +55,24 @@ Works on both web pages and imported PDFs.
 - Four highlight colors available (orange, green, blue, pink) — pick from the toolbar.
 - Same select-to-highlight flow, plus a dedicated highlight mode toggled with `H`.
 - Export all highlights as Markdown via the export button.
+
+### Sharing Annotations
+
+Share your highlights and notes on any reading with anyone.
+
+**Setup:**
+1. Go to **Settings** → **Marginalia Account** → create an account (email + password).
+2. Your Supabase project must have the schema from `supabase-schema.sql` applied (see [Supabase Setup](#supabase-setup)).
+
+**Sharing:**
+- Click **Share** in the popup (Highlights tab) or the library reader toolbar.
+- A link is copied to your clipboard automatically.
+- For web pages, the link opens the **original article** with your highlights overlaid in blue and an attribution banner showing your name.
+- For library PDFs, the link opens a standalone viewer showing your highlights and notes.
+- Re-sharing the same page updates the existing share (same link, fresh data).
+
+**Managing shares:**
+- Settings page shows all your shares with copy/delete buttons.
 
 ### Notes Sidebar
 
@@ -84,32 +116,39 @@ Open from the popup footer or the Library page directly.
 - Sort by date, title, page count, or word count.
 
 **Pinning:**
-- Click the pin icon (📌) on any card to pin it to the top of the grid.
+- Click the pin icon on any card to pin it to the top of the grid.
 - Pinned items stay above unpinned items regardless of sort order, separated by a divider.
-- Each group sorts independently by the active sort key.
-- Pin state persists across sessions.
 
 **Reading PDFs:**
 - Click any card to open the built-in PDF reader with canvas rendering, text selection, lazy page loading, and scroll position memory.
 - Full highlighting and notes support (same as web pages, plus color options and in-PDF search).
 
+### Knowledge Graph
+
+Visualizes connections between your readings using D3.js force-directed graph.
+
+- Nodes: readings (colored by tag) + concepts (colored by type).
+- Optional Claude API integration for automatic concept extraction from highlights and notes.
+- Enable in Settings → Knowledge Graph → provide an Anthropic API key and toggle auto-extract.
+
 ### Sync
 
-Configure in **Settings** (accessible from the popup footer).
+Configure in **Settings** (accessible from the popup footer or nav bar).
+
+**GitHub:**
+- Provide a Personal Access Token (fine-grained, Contents read/write), repo owner, repo name, and file path.
+- Each sync pushes a full JSON snapshot of all readings (with highlights and notes) to the repo.
+- Optional: per-reading `.md` files with YAML frontmatter (Obsidian-compatible) in a configurable directory.
+- **Restore from GitHub**: Pulls the JSON from the repo and merges missing readings into local storage.
+- **Restore from File**: Same merge from a local `.json` backup.
 
 **Telegram:**
 - Provide a Bot Token and Chat ID.
 - Each sync sends a diff message listing new and updated readings since the last sync.
 - A daily summary is sent at 23:00 local time if you read anything that day.
 
-**GitHub:**
-- Provide a Personal Access Token (fine-grained, Contents read/write), repo owner, repo name, and file path.
-- Each sync pushes a full JSON snapshot of all readings (with highlights and notes) to the repo.
-- **Restore from GitHub**: Pulls the JSON from the repo and merges missing readings into local storage.
-- **Restore from File**: Same merge from a local `.json` backup.
-
 **Auto-sync:**
-- Configurable interval (default: 60 minutes, range: 1–1440).
+- Configurable interval (default: 60 minutes, range: 1-1440).
 - Runs automatically via a Chrome alarm. Only fires if at least one sync channel is configured.
 
 ### Auto-Classification
@@ -123,7 +162,18 @@ Readings are automatically tagged on creation using a keyword scoring system:
 | Content keyword match | 1 pt |
 | Title keyword in content | 0.5 pts |
 
-A minimum score of 2.5 is required; otherwise the reading is tagged `General Learning`. Manual tag selections in the popup always take priority.
+A minimum score of 2.5 is required; otherwise the reading is tagged `General Learning`. Manual tag selections always take priority.
+
+---
+
+## Supabase Setup
+
+The sharing feature uses Supabase (Postgres + auth) as a backend. To set it up:
+
+1. Create a free project at [supabase.com](https://supabase.com).
+2. Go to **SQL Editor** → paste and run the contents of `supabase-schema.sql`.
+3. (Recommended) Go to **Authentication** → **Providers** → **Email** → disable "Confirm email" for easier onboarding.
+4. The project URL and anon key are already configured in `lib/supabase.js`.
 
 ---
 
@@ -151,9 +201,6 @@ A minimum score of 2.5 is required; otherwise the reading is tagged `General Lea
 | `Cmd/Ctrl+0` | Reset zoom (150%) |
 | `Cmd/Ctrl+S` | Save notes |
 | `Escape` | Close search / exit highlight mode / dismiss popovers |
-| `Enter` | Next search match |
-| `Shift+Enter` | Previous search match |
-| `Cmd/Ctrl+Enter` | Save note (in edit textarea) |
 
 ### Web Pages
 | Key | Action |
@@ -165,10 +212,57 @@ A minimum score of 2.5 is required; otherwise the reading is tagged `General Lea
 
 ## Data Storage
 
+### Chrome Extension
 | Data | Location |
 |---|---|
 | Reading metadata, highlights, scroll positions | `chrome.storage.local` |
-| Sync credentials | `chrome.storage.sync` |
+| Sync credentials, Supabase session | `chrome.storage.local` / `chrome.storage.sync` |
 | PDF files + extracted text | IndexedDB (`marginaliaDB`) |
 
+### Electron App
+| Data | Location |
+|---|---|
+| Reading metadata | `~/.marginalia/data.json` |
+| PDF library | `~/.marginalia/library/` (meta.json + PDF binaries) |
+
+### Cloud (Supabase)
+| Data | Location |
+|---|---|
+| User accounts | `auth.users` (Supabase Auth) |
+| Shared annotations | `shared_pages` table |
+
 Web page keys use `origin + pathname`. Library PDF keys use a content hash: `library:{sha256prefix}-{size}-{filename}`.
+
+---
+
+## Project Structure
+
+```
+manifest.json          Chrome extension manifest (Manifest V3)
+background.js          Service worker: sync, messaging, concept extraction
+content.js / .css      Injected on all pages: highlighting, shared overlay
+popup.html / .js       Extension popup: log readings, highlights, sharing
+dashboard.html / .js   Stats dashboard: heatmap, readings table
+library.html / .js     PDF library: import, browse, search
+library-reader.html/js Canvas PDF viewer: highlighting, notes, sharing
+graph.html / .js       D3 knowledge graph visualization
+options.html / .js     Settings: credentials, account, share management
+shared.html / .js      Viewer for shared library PDF annotations
+nav-sync.js            Sync button wired into nav bar on all pages
+lib/
+  supabase.js          Supabase client (auth + sharing, raw fetch)
+  db.js                IndexedDB abstraction
+  classify.js          Auto-classification keyword scoring
+  pdf.min.mjs          PDF.js library
+  marked.min.js        Markdown parser
+  katex.min.js         LaTeX math rendering
+  dompurify.min.js     HTML sanitization
+app/
+  main.js              Electron main process
+  preload.js           IPC bridge (chrome.* API polyfills)
+  storage.js           File-based storage (~/.marginalia/)
+  library-storage.js   File-based PDF storage
+  sync.js              Sync logic (ported from background.js)
+  package.json         Electron dependencies + build config
+supabase-schema.sql    SQL schema for sharing tables + RLS policies
+```
