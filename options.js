@@ -1,3 +1,143 @@
+import { signUp, signIn, signOut, getCurrentUser, getMyShares, deleteShare, getShareUrl } from './lib/supabase.js';
+
+// ── Account / Auth ─────────────────────────────────────────────────
+const accountAuth = document.getElementById('account-auth');
+const accountSignedIn = document.getElementById('account-signed-in');
+const authForm = document.getElementById('auth-form');
+const authFormTitle = document.getElementById('auth-form-title');
+const authNameField = document.getElementById('auth-name-field');
+const authMsg = document.getElementById('auth-msg');
+let authMode = 'signin'; // 'signin' or 'signup'
+
+document.getElementById('auth-show-signin').addEventListener('click', () => {
+  authMode = 'signin';
+  authFormTitle.textContent = 'Sign In';
+  authNameField.style.display = 'none';
+  document.getElementById('auth-submit').textContent = 'Sign In';
+  authForm.style.display = 'block';
+});
+
+document.getElementById('auth-show-signup').addEventListener('click', () => {
+  authMode = 'signup';
+  authFormTitle.textContent = 'Create Account';
+  authNameField.style.display = 'block';
+  document.getElementById('auth-submit').textContent = 'Create Account';
+  authForm.style.display = 'block';
+});
+
+document.getElementById('auth-submit').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const name = document.getElementById('auth-name').value.trim();
+
+  if (!email || !password) { showAuthMsg('Email and password required', true); return; }
+  if (password.length < 6) { showAuthMsg('Password must be 6+ characters', true); return; }
+
+  const btn = document.getElementById('auth-submit');
+  btn.disabled = true;
+  btn.textContent = authMode === 'signup' ? 'Creating...' : 'Signing in...';
+
+  try {
+    if (authMode === 'signup') {
+      const result = await signUp(email, password, name || email.split('@')[0]);
+      if (!result.access_token) {
+        showAuthMsg('Check your email to confirm your account', false);
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+        return;
+      }
+    } else {
+      await signIn(email, password);
+    }
+    await showSignedInState();
+  } catch (e) {
+    showAuthMsg(e.message, true);
+    btn.disabled = false;
+    btn.textContent = authMode === 'signup' ? 'Create Account' : 'Sign In';
+  }
+});
+
+document.getElementById('auth-signout').addEventListener('click', async () => {
+  await signOut();
+  showSignedOutState();
+});
+
+function showAuthMsg(text, isError) {
+  authMsg.textContent = text;
+  authMsg.style.display = 'inline';
+  authMsg.style.color = isError ? '#eb5757' : '#6fcf97';
+  if (!isError) setTimeout(() => { authMsg.style.display = 'none'; }, 4000);
+}
+
+async function showSignedInState() {
+  const user = await getCurrentUser();
+  if (!user) { showSignedOutState(); return; }
+
+  accountAuth.style.display = 'none';
+  accountSignedIn.style.display = 'block';
+  document.getElementById('account-display').textContent = user.user_metadata?.display_name || user.email.split('@')[0];
+  document.getElementById('account-email').textContent = user.email;
+
+  loadMyShares();
+}
+
+function showSignedOutState() {
+  accountAuth.style.display = 'block';
+  accountSignedIn.style.display = 'none';
+  authForm.style.display = 'none';
+}
+
+async function loadMyShares() {
+  const list = document.getElementById('my-shares-list');
+  const shares = await getMyShares();
+
+  if (!shares.length) {
+    list.innerHTML = '<span style="color:#555;">No shares yet. Use the Share button on any reading to create one.</span>';
+    return;
+  }
+
+  list.innerHTML = shares.map(s => {
+    const date = new Date(s.updated_at).toLocaleDateString();
+    const shareUrl = getShareUrl(s.share_code);
+    return `<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1a1a1a;">
+      <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${esc(s.title)}</span>
+      <span style="color:#555; font-size:10px; white-space:nowrap;">${date}</span>
+      <button class="copy-share-btn" data-url="${esc(shareUrl)}" style="background:none; border:1px solid #3a3a3a; color:#e8a87c; font-size:10px; padding:2px 8px; border-radius:4px; cursor:pointer; white-space:nowrap;">Copy Link</button>
+      <button class="delete-share-btn" data-id="${s.id}" style="background:none; border:none; color:#555; font-size:14px; cursor:pointer; padding:0 2px;">&times;</button>
+    </div>`;
+  }).join('');
+
+  // Wire up copy buttons
+  list.querySelectorAll('.copy-share-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(btn.dataset.url);
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy Link'; }, 1500);
+    });
+  });
+
+  // Wire up delete buttons
+  list.querySelectorAll('.delete-share-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await deleteShare(btn.dataset.id);
+        btn.closest('div').remove();
+      } catch {}
+    });
+  });
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// Check auth state on load
+getCurrentUser().then(user => {
+  if (user) showSignedInState();
+});
+
 // Load saved settings
 chrome.storage.sync.get(
   ['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir', 'claudeApiKey', 'autoExtract'],

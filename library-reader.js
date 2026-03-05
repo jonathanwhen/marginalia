@@ -1,5 +1,6 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
 import { getTranscript } from './lib/db.js';
+import { shareAnnotations, getShareUrl, getCurrentUser } from './lib/supabase.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
 
@@ -85,6 +86,7 @@ document.getElementById('btn-highlight-mode').addEventListener('click', () => {
 document.getElementById('banner-exit').addEventListener('click', exitHighlightMode);
 document.getElementById('btn-search').addEventListener('click', toggleSearch);
 document.getElementById('btn-export').addEventListener('click', exportHighlightsAsMarkdown);
+document.getElementById('btn-share').addEventListener('click', shareCurrentPage);
 
 // Color picker
 document.querySelectorAll('.color-dot').forEach(dot => {
@@ -1132,6 +1134,38 @@ async function exportHighlightsAsMarkdown() {
   } catch {
     showToast('Failed to copy — check clipboard permissions');
   }
+}
+
+async function shareCurrentPage() {
+  const btn = document.getElementById('btn-share');
+  const origText = btn.textContent;
+  btn.textContent = 'Sharing...';
+  btn.disabled = true;
+
+  try {
+    // Get reading metadata from storage
+    const readingRes = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
+    const reading = readingRes?.reading || {};
+
+    const result = await shareAnnotations({
+      pageKey: currentPageKey,
+      title: reading.title || currentTitle,
+      author: reading.author || '',
+      url: reading.url || currentPageKey,
+      notes: document.getElementById('sb-notes')?.value?.trim() || reading.notes || '',
+      tags: reading.tags || [],
+      highlights
+    });
+
+    const shareUrl = getShareUrl(result.shareCode);
+    await navigator.clipboard.writeText(shareUrl);
+    showToast(result.updated ? 'Share updated — link copied!' : 'Share link copied to clipboard!');
+  } catch (e) {
+    showToast(e.message || 'Failed to share');
+  }
+
+  btn.textContent = origText;
+  btn.disabled = false;
 }
 
 function showToast(message) {

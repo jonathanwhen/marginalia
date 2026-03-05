@@ -52,6 +52,48 @@
   <div class="settings-content">
   <h1>Settings</h1>
 
+  <h2 style="font-size:14px; margin: 0 0 16px; color: #e8a87c;">Marginalia Account</h2>
+  <div class="hint" style="margin-bottom:12px;">Sign in to share your annotations with anyone via a link.</div>
+
+  <!-- Signed-out state -->
+  <div id="account-auth">
+    <div style="display:flex; gap:6px; margin-bottom:8px;">
+      <button id="auth-show-signin" style="background:none; border:1px solid #e8a87c; color:#e8a87c; font-size:12px; padding:6px 14px; cursor:pointer; border-radius:6px;">Sign In</button>
+      <button id="auth-show-signup" style="background:none; border:1px solid #555; color:#999; font-size:12px; padding:6px 14px; cursor:pointer; border-radius:6px;">Create Account</button>
+    </div>
+    <div id="auth-form" style="display:none;">
+      <div class="field">
+        <label id="auth-form-title">Sign In</label>
+      </div>
+      <div id="auth-name-field" class="field" style="display:none;">
+        <input type="text" id="auth-name" placeholder="Display name" />
+      </div>
+      <div class="field">
+        <input type="email" id="auth-email" placeholder="Email" />
+      </div>
+      <div class="field">
+        <input type="password" id="auth-password" placeholder="Password (min 6 chars)" />
+      </div>
+      <button id="auth-submit" style="font-size:12px;">Sign In</button>
+      <span class="saved" id="auth-msg" style="margin-left:8px;"></span>
+    </div>
+  </div>
+
+  <!-- Signed-in state -->
+  <div id="account-signed-in" style="display:none;">
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+      <span style="font-size:13px; color:#e0e0e0;" id="account-display"></span>
+      <span style="font-size:11px; color:#555;" id="account-email"></span>
+      <button id="auth-signout" style="background:none; border:1px solid #555; color:#999; font-size:11px; padding:4px 10px; cursor:pointer; border-radius:4px; margin-left:auto;">Sign Out</button>
+    </div>
+    <div id="my-shares-section">
+      <div style="font-size:11px; color:#555; margin-bottom:8px;">Your shared annotations:</div>
+      <div id="my-shares-list" style="font-size:12px; color:#888;"></div>
+    </div>
+  </div>
+
+  <hr style="border:none; border-top:1px solid #1e1e1e; margin:24px 0;">
+
   <div class="field">
     <label>Telegram Bot Token</label>
     <input type="text" id="botToken" placeholder="123456789:ABCdef..." />
@@ -143,7 +185,7 @@
   </div>
 
   </div>
-  <script src="options.js"></script>
+  <script type="module" src="options.js"></script>
   <script src="nav-sync.js"></script>
 </body>
 </html>

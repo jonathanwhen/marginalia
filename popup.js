@@ -1,3 +1,5 @@
+import { shareAnnotations, getShareUrl } from './lib/supabase.js';
+
 // ── Tab switching ─────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -244,6 +246,42 @@ document.getElementById('hl-mode-btn').addEventListener('click', async () => {
   } catch (e) {}
 
   window.close();
+});
+
+// ── Share annotations ─────────────────────────────────────────────
+document.getElementById('hl-share-btn').addEventListener('click', async () => {
+  if (!currentPageKey) { showToast('No page context', 'error'); return; }
+
+  const btn = document.getElementById('hl-share-btn');
+  btn.textContent = 'Sharing...';
+  btn.disabled = true;
+
+  try {
+    // Gather reading + highlights
+    const readingRes = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
+    const reading = readingRes?.reading || {};
+    const hlRes = await chrome.storage.local.get([currentPageKey]);
+    const highlights = hlRes[currentPageKey] || [];
+
+    const result = await shareAnnotations({
+      pageKey: currentPageKey,
+      title: reading.title || document.getElementById('log-title').value.trim(),
+      author: reading.author || document.getElementById('log-author').value.trim(),
+      url: reading.url || document.getElementById('log-url').value.trim(),
+      notes: reading.notes || '',
+      tags: reading.tags || [],
+      highlights
+    });
+
+    const shareUrl = getShareUrl(result.shareCode);
+    await navigator.clipboard.writeText(shareUrl);
+    showToast(result.updated ? 'Updated — link copied!' : 'Link copied!');
+  } catch (e) {
+    showToast(e.message || 'Failed to share', 'error');
+  }
+
+  btn.textContent = 'Share Annotations';
+  btn.disabled = false;
 });
 
 // ── Highlights panel (with delete) ────────────────────────────────

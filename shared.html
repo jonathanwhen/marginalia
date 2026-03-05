@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Marginalia — Shared Annotations</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    body { background: #0a0a0a; color: #e0e0e0; min-height: 100vh; }
+
+    /* ── Nav ── */
+    .page-nav {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 32px; border-bottom: 1px solid #1e1e1e;
+      background: #0a0a0a; position: sticky; top: 0; z-index: 50;
+    }
+    .page-nav .nav-brand {
+      font-size: 16px; margin-right: 12px; text-decoration: none; display: flex; align-items: center; gap: 8px;
+    }
+    .page-nav .nav-brand-icon { font-size: 16px; }
+    .page-nav .nav-brand-text { font-size: 13px; font-weight: 700; color: #fff; }
+    .page-nav a {
+      font-size: 12px; color: #555; text-decoration: none;
+      padding: 5px 12px; border-radius: 5px; transition: all 0.15s;
+      font-weight: 500;
+    }
+    .page-nav a:hover { color: #e0e0e0; background: #161616; }
+    .page-nav .nav-spacer { flex: 1; }
+
+    /* ── Content ── */
+    .container { max-width: 680px; margin: 0 auto; padding: 40px 20px 80px; }
+
+    .shared-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; color: #888; background: #161616;
+      padding: 4px 10px; border-radius: 20px; margin-bottom: 16px;
+    }
+    .shared-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: #6fcf97; }
+
+    h1 { font-size: 22px; font-weight: 700; color: #fff; margin-bottom: 8px; line-height: 1.3; }
+    .meta { font-size: 13px; color: #666; margin-bottom: 24px; }
+    .meta a { color: #e8a87c; text-decoration: none; }
+    .meta a:hover { text-decoration: underline; }
+    .meta .author { color: #999; }
+
+    .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 24px; }
+    .tag {
+      font-size: 10px; padding: 3px 8px; border-radius: 20px;
+      background: #2a1f14; border: 1px solid #3a2a1a; color: #e8a87c;
+    }
+
+    .notes-section { margin-bottom: 32px; }
+    .notes-section h2 { font-size: 14px; color: #888; margin-bottom: 12px; font-weight: 600; }
+    .notes-body { font-size: 14px; line-height: 1.7; color: #ccc; white-space: pre-wrap; }
+
+    .highlights-section h2 {
+      font-size: 14px; color: #888; margin-bottom: 16px; font-weight: 600;
+    }
+
+    .highlight-card {
+      padding: 16px; margin-bottom: 12px;
+      background: #111; border-radius: 8px;
+      border-left: 3px solid #e8a87c;
+    }
+    .highlight-card.green { border-left-color: #6fcf97; }
+    .highlight-card.blue { border-left-color: #64b5f6; }
+    .highlight-card.pink { border-left-color: #f06292; }
+
+    .hl-text {
+      font-size: 14px; line-height: 1.6; color: #ddd;
+      font-style: italic; margin-bottom: 6px;
+    }
+    .hl-comment { font-size: 13px; color: #999; margin-top: 8px; }
+    .hl-meta { font-size: 11px; color: #555; margin-top: 6px; }
+
+    .hl-latex {
+      margin: 6px 0;
+    }
+    .hl-latex code {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px; background: #1a1a1a; color: #6fcf97;
+      padding: 2px 6px; border-radius: 3px;
+    }
+
+    .empty-state {
+      text-align: center; padding: 80px 20px; color: #555;
+    }
+    .empty-state h2 { font-size: 18px; color: #888; margin-bottom: 8px; }
+    .empty-state p { font-size: 14px; }
+
+    .loading { text-align: center; padding: 80px 20px; color: #666; font-size: 14px; }
+
+    .error-state {
+      text-align: center; padding: 80px 20px;
+    }
+    .error-state h2 { font-size: 18px; color: #eb5757; margin-bottom: 8px; }
+    .error-state p { font-size: 14px; color: #888; }
+  </style>
+</head>
+<body>
+  <nav class="page-nav">
+    <span class="nav-brand"><span class="nav-brand-icon">✦</span><span class="nav-brand-text">Marginalia</span></span>
+    <span class="nav-spacer"></span>
+  </nav>
+
+  <div class="container">
+    <div class="loading" id="loading">Loading shared annotations...</div>
+    <div id="content" style="display:none;"></div>
+    <div id="error" style="display:none;"></div>
+  </div>
+
+  <script type="module" src="shared.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@
   "version": "2.1",
   "description": "Reading tracker and annotation tool",
   "permissions": ["storage", "contextMenus", "activeTab", "tabs", "scripting", "alarms", "webNavigation"],
-  "host_permissions": ["https://api.telegram.org/*", "https://api.github.com/*", "https://api.anthropic.com/*", "<all_urls>"],
+  "host_permissions": ["https://api.telegram.org/*", "https://api.github.com/*", "https://api.anthropic.com/*", "https://lfvbrrxnjwanbniaegnf.supabase.co/*", "<all_urls>"],
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
