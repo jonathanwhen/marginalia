@@ -273,7 +273,8 @@ document.getElementById('hl-share-btn').addEventListener('click', async () => {
       highlights
     });
 
-    const shareUrl = getShareUrl(result.shareCode);
+    const originalUrl = reading.url || document.getElementById('log-url').value.trim();
+    const shareUrl = getShareUrl(result.shareCode, originalUrl);
     await navigator.clipboard.writeText(shareUrl);
     showToast(result.updated ? 'Updated — link copied!' : 'Link copied!');
   } catch (e) {

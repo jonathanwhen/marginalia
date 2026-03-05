@@ -930,10 +930,198 @@
     }
   });
 
+  // ── Shared highlights overlay ────────────────────────────────────
+  // Detects #marginalia-share=CODE in the URL and fetches + renders
+  // shared highlights from Supabase with an attribution banner.
+
+  const SUPABASE_URL = 'https://lfvbrrxnjwanbniaegnf.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmdmJycnhuandhbmJuaWFlZ25mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NzAxMDYsImV4cCI6MjA4ODI0NjEwNn0.6NzXByK1y8FP-iCqYx6GCiuG6DsIvXpbkyqiCX_R1Os';
+
+  function getShareCodeFromHash() {
+    const hash = location.hash;
+    const match = hash.match(/^#marginalia-share=([a-z0-9]+)$/);
+    return match ? match[1] : null;
+  }
+
+  async function loadSharedHighlights(shareCode) {
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/shared_pages?share_code=eq.${encodeURIComponent(shareCode)}&select=*,profiles(display_name)`,
+        { headers: { 'apikey': SUPABASE_ANON_KEY } }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.length) return;
+
+      const shared = data[0];
+      const highlights = shared.highlights || [];
+      const sharedBy = shared.profiles?.display_name || 'Someone';
+
+      // Show attribution banner
+      showShareBanner(sharedBy, shared.title, highlights.length);
+
+      // Render shared highlights with distinct styling
+      highlights.forEach(h => {
+        // Assign a temporary shared-specific ID so they don't collide with user's own
+        const sharedH = { ...h, id: 'shared-' + (h.id || crypto.randomUUID()), _shared: true };
+        injectSharedHighlight(sharedH);
+      });
+    } catch (e) {
+      // Silently fail — don't disrupt page if fetch fails
+    }
+  }
+
+  function injectSharedHighlight(h) {
+    // Reuse existing highlight injection logic
+    if (h.anchor) {
+      const range = restoreFromAnchor(h.anchor, h.text);
+      if (range) { wrapRangeShared(range, h); return; }
+    }
+
+    // Fallback: text search
+    const normalizedTarget = h.text.replace(/\s+/g, ' ');
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node, accumulated = '', nodes = [];
+    while ((node = walker.nextNode())) {
+      nodes.push({ node, start: accumulated.length });
+      accumulated += node.nodeValue;
+    }
+
+    const normalizedAccum = accumulated.replace(/\s+/g, ' ');
+    const idx = normalizedAccum.indexOf(normalizedTarget);
+    if (idx === -1) return;
+
+    let origIdx = mapNormalizedToOriginal(accumulated, idx);
+    let origEnd = mapNormalizedToOriginal(accumulated, idx + normalizedTarget.length);
+
+    let startNode = null, startOff = 0, endNode = null, endOff = 0;
+    for (const { node: n, start } of nodes) {
+      const nEnd = start + n.nodeValue.length;
+      if (startNode === null && origIdx < nEnd) {
+        startNode = n;
+        startOff = origIdx - start;
+      }
+      if (origEnd <= nEnd) {
+        endNode = n;
+        endOff = origEnd - start;
+        break;
+      }
+    }
+    if (!startNode || !endNode) return;
+
+    const range = document.createRange();
+    range.setStart(startNode, startOff);
+    range.setEnd(endNode, endOff);
+    wrapRangeShared(range, h);
+  }
+
+  function wrapRangeShared(range, h) {
+    try {
+      const mark = document.createElement('mark');
+      mark.className = 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '');
+      mark.dataset.ocId = h.id;
+      range.surroundContents(mark);
+      mark.addEventListener('click', e => {
+        e.stopPropagation();
+        showSharedNoteBubble(mark, h);
+      });
+      return mark;
+    } catch {
+      return wrapRangeSharedMulti(range, h);
+    }
+  }
+
+  function wrapRangeSharedMulti(range, h) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node)) textNodes.push(node);
+    }
+    if (!textNodes.length) return null;
+
+    let firstMark = null;
+    for (const tNode of textNodes) {
+      let start = 0, end = tNode.nodeValue.length;
+      if (tNode === range.startContainer) start = range.startOffset;
+      if (tNode === range.endContainer) end = range.endOffset;
+      if (start >= end) continue;
+
+      if (end < tNode.nodeValue.length) tNode.splitText(end);
+      const target = start > 0 ? tNode.splitText(start) : tNode;
+
+      const mark = document.createElement('mark');
+      mark.className = 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '');
+      mark.dataset.ocId = h.id;
+      target.parentNode.insertBefore(mark, target);
+      mark.appendChild(target);
+      mark.addEventListener('click', e => {
+        e.stopPropagation();
+        showSharedNoteBubble(mark, h);
+      });
+      if (!firstMark) firstMark = mark;
+    }
+    return firstMark;
+  }
+
+  function showSharedNoteBubble(anchor, h) {
+    removeNoteBubble();
+    noteBubble = document.createElement('div');
+    noteBubble.id = 'oc-note-bubble';
+    noteBubble.innerHTML = `
+      <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
+      ${h.latex ? `<div class="oc-nb-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
+      ${h.comment ? `<div class="oc-nb-comment">${escHtml(h.comment)}</div>` : ''}
+      <div style="margin-top:6px; padding-top:6px; border-top:1px solid #222; font-size:10px; color:#555;">Shared annotation (read-only)</div>
+    `;
+    document.body.appendChild(noteBubble);
+
+    const rect = anchor.getBoundingClientRect();
+    let nx = rect.left + window.scrollX;
+    let ny = rect.bottom + window.scrollY + 8;
+    nx = Math.max(8, Math.min(nx, window.innerWidth - 270));
+    noteBubble.style.left = nx + 'px';
+    noteBubble.style.top = ny + 'px';
+  }
+
+  function showShareBanner(sharedBy, title, highlightCount) {
+    const banner = document.createElement('div');
+    banner.id = 'oc-share-banner';
+    banner.innerHTML = `
+      <span class="oc-share-banner-icon">\u2726</span>
+      <span class="oc-share-banner-text">
+        <strong>${escHtml(sharedBy)}</strong> shared ${highlightCount} annotation${highlightCount !== 1 ? 's' : ''} on this page via Marginalia
+      </span>
+      <button id="oc-share-banner-close">\u2715</button>
+    `;
+    document.body.appendChild(banner);
+    document.body.style.marginTop = (parseInt(getComputedStyle(document.body).marginTop) || 0) + 40 + 'px';
+
+    banner.querySelector('#oc-share-banner-close').addEventListener('click', () => {
+      banner.remove();
+      document.body.style.marginTop = '';
+      // Remove shared highlights
+      document.querySelectorAll('.oc-highlight-shared').forEach(mark => {
+        const parent = mark.parentNode;
+        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+        parent.removeChild(mark);
+        parent.normalize();
+      });
+      // Clean the hash
+      history.replaceState(null, '', location.pathname + location.search);
+    });
+  }
+
   // Apply on load
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', applyStoredHighlights);
+    document.addEventListener('DOMContentLoaded', () => {
+      applyStoredHighlights();
+      const shareCode = getShareCodeFromHash();
+      if (shareCode) loadSharedHighlights(shareCode);
+    });
   } else {
     applyStoredHighlights();
+    const shareCode = getShareCodeFromHash();
+    if (shareCode) loadSharedHighlights(shareCode);
   }
 })();

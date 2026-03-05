@@ -98,7 +98,7 @@ async function loadMyShares() {
 
   list.innerHTML = shares.map(s => {
     const date = new Date(s.updated_at).toLocaleDateString();
-    const shareUrl = getShareUrl(s.share_code);
+    const shareUrl = getShareUrl(s.share_code, s.url);
     return `<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1a1a1a;">
       <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(s.title)}">${esc(s.title)}</span>
       <span style="color:#555; font-size:10px; white-space:nowrap;">${date}</span>

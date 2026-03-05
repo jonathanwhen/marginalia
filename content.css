@@ -1,3 +1,54 @@
+/* Shared highlight styles (read-only, from other users) */
+.oc-highlight-shared {
+  background: rgba(100, 181, 246, 0.25);
+  border-bottom: 1.5px solid rgba(100, 181, 246, 0.7);
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.oc-highlight-shared:hover {
+  background: rgba(100, 181, 246, 0.45);
+}
+.oc-highlight-shared-comment {
+  background: rgba(100, 181, 246, 0.3);
+  border-bottom: 1.5px solid rgba(100, 181, 246, 0.8);
+}
+
+/* Share attribution banner */
+#oc-share-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2147483647;
+  background: #0f1923;
+  border-bottom: 2px solid #64b5f6;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: -apple-system, sans-serif;
+  font-size: 13px;
+  color: #ccc;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+#oc-share-banner .oc-share-banner-icon { font-size: 16px; color: #64b5f6; }
+#oc-share-banner .oc-share-banner-text { flex: 1; }
+#oc-share-banner .oc-share-banner-text strong { color: #64b5f6; }
+#oc-share-banner #oc-share-banner-close {
+  background: #1a2a3a;
+  border: 1px solid #2a3a4a;
+  color: #aaa;
+  padding: 4px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: -apple-system, sans-serif;
+  transition: background 0.15s, color 0.15s;
+}
+#oc-share-banner #oc-share-banner-close:hover { background: #2a3a4a; color: #fff; }
+
+/* User's own highlights */
 .oc-highlight {
   background: rgba(232, 168, 124, 0.35);
   border-bottom: 1.5px solid rgba(232, 168, 124, 0.8);

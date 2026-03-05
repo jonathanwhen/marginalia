@@ -1157,7 +1157,7 @@ async function shareCurrentPage() {
       highlights
     });
 
-    const shareUrl = getShareUrl(result.shareCode);
+    const shareUrl = getShareUrl(result.shareCode, reading.url || currentPageKey);
     await navigator.clipboard.writeText(shareUrl);
     showToast(result.updated ? 'Share updated — link copied!' : 'Share link copied to clipboard!');
   } catch (e) {

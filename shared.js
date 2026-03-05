@@ -16,6 +16,17 @@ if (!shareCode) {
 async function loadSharedPage(code) {
   try {
     const page = await getSharedPage(code);
+
+    // For web pages, redirect to the original URL with the share hash
+    // so the content script can overlay highlights on the actual page.
+    if (page.url && !page.url.startsWith('library:')) {
+      const url = new URL(page.url);
+      url.hash = `marginalia-share=${code}`;
+      location.href = url.toString();
+      return;
+    }
+
+    // Library PDFs: render the list-based viewer (no public URL to redirect to)
     renderPage(page);
   } catch (e) {
     showError('Not found', 'This shared link may have been deleted or the code is invalid.');
