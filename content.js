@@ -57,11 +57,13 @@
     });
   }
 
-  function injectHighlight(h) {
+  // Inject a highlight into the DOM. wrapFn controls styling/behavior (own vs shared).
+  function injectHighlight(h, wrapFn) {
+    const wrap = wrapFn || wrapRange;
     // Primary: anchor-based restoration (CSS selector + text offset + prefix/suffix verification)
     if (h.anchor) {
       const range = restoreFromAnchor(h.anchor, h.text);
-      if (range) { wrapRange(range, h); return; }
+      if (range) { wrap(range, h); return; }
     }
 
     // Fallback: whitespace-normalized text search
@@ -100,7 +102,7 @@
     const range = document.createRange();
     range.setStart(startNode, startOff);
     range.setEnd(endNode, endOff);
-    wrapRange(range, h);
+    wrap(range, h);
   }
 
   // Map a character index in whitespace-normalized text back to original text
@@ -255,28 +257,31 @@
     return parts.join(' > ') || null;
   }
 
-  // Returns the first created <mark> element (or null on failure)
-  function wrapRange(range, h) {
-    // Try simple surroundContents first (works when selection is within one element)
+  // Returns the first created <mark> element (or null on failure).
+  // opts.shared: if true, uses shared highlight styling (read-only, blue).
+  function wrapRange(range, h, opts) {
+    const shared = opts?.shared;
     try {
       const mark = document.createElement('mark');
-      mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+      mark.className = shared
+        ? 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '')
+        : 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
       mark.dataset.ocId = h.id;
-      mark.title = h.comment || '';
+      if (!shared) mark.title = h.comment || '';
       range.surroundContents(mark);
       mark.addEventListener('click', e => {
         e.stopPropagation();
-        if (!highlightMode) showNoteBubble(mark, h);
+        if (shared) showSharedNoteBubble(mark, h);
+        else if (!highlightMode) showNoteBubble(mark, h);
       });
       return mark;
     } catch (e) {
-      // Cross-element selection — wrap each text node individually
-      return wrapRangeMulti(range, h);
+      return wrapRangeMulti(range, h, opts);
     }
   }
 
-  // Handles selections that span multiple DOM elements by wrapping each text node separately
-  function wrapRangeMulti(range, h) {
+  function wrapRangeMulti(range, h, opts) {
+    const shared = opts?.shared;
     const textNodes = [];
     const walker = document.createTreeWalker(
       range.commonAncestorContainer,
@@ -296,19 +301,21 @@
       if (tNode === range.endContainer) end = range.endOffset;
       if (start >= end) continue;
 
-      // Split off the portion after our selection (must happen before the start split)
       if (end < tNode.nodeValue.length) tNode.splitText(end);
       const target = start > 0 ? tNode.splitText(start) : tNode;
 
       const mark = document.createElement('mark');
-      mark.className = 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+      mark.className = shared
+        ? 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '')
+        : 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
       mark.dataset.ocId = h.id;
-      mark.title = h.comment || '';
+      if (!shared) mark.title = h.comment || '';
       target.parentNode.insertBefore(mark, target);
       mark.appendChild(target);
       mark.addEventListener('click', e => {
         e.stopPropagation();
-        if (!highlightMode) showNoteBubble(mark, h);
+        if (shared) showSharedNoteBubble(mark, h);
+        else if (!highlightMode) showNoteBubble(mark, h);
       });
       if (!firstMark) firstMark = mark;
     }
@@ -960,108 +967,15 @@
       // Show attribution banner
       showShareBanner(sharedBy, shared.title, highlights.length);
 
-      // Render shared highlights with distinct styling
+      // Render shared highlights using parameterized wrapRange
+      const sharedWrap = (range, h) => wrapRange(range, h, { shared: true });
       highlights.forEach(h => {
-        // Assign a temporary shared-specific ID so they don't collide with user's own
-        const sharedH = { ...h, id: 'shared-' + (h.id || crypto.randomUUID()), _shared: true };
-        injectSharedHighlight(sharedH);
+        const sharedH = { ...h, id: 'shared-' + (h.id || crypto.randomUUID()) };
+        injectHighlight(sharedH, sharedWrap);
       });
     } catch (e) {
       // Silently fail — don't disrupt page if fetch fails
     }
-  }
-
-  function injectSharedHighlight(h) {
-    // Reuse existing highlight injection logic
-    if (h.anchor) {
-      const range = restoreFromAnchor(h.anchor, h.text);
-      if (range) { wrapRangeShared(range, h); return; }
-    }
-
-    // Fallback: text search
-    const normalizedTarget = h.text.replace(/\s+/g, ' ');
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node, accumulated = '', nodes = [];
-    while ((node = walker.nextNode())) {
-      nodes.push({ node, start: accumulated.length });
-      accumulated += node.nodeValue;
-    }
-
-    const normalizedAccum = accumulated.replace(/\s+/g, ' ');
-    const idx = normalizedAccum.indexOf(normalizedTarget);
-    if (idx === -1) return;
-
-    let origIdx = mapNormalizedToOriginal(accumulated, idx);
-    let origEnd = mapNormalizedToOriginal(accumulated, idx + normalizedTarget.length);
-
-    let startNode = null, startOff = 0, endNode = null, endOff = 0;
-    for (const { node: n, start } of nodes) {
-      const nEnd = start + n.nodeValue.length;
-      if (startNode === null && origIdx < nEnd) {
-        startNode = n;
-        startOff = origIdx - start;
-      }
-      if (origEnd <= nEnd) {
-        endNode = n;
-        endOff = origEnd - start;
-        break;
-      }
-    }
-    if (!startNode || !endNode) return;
-
-    const range = document.createRange();
-    range.setStart(startNode, startOff);
-    range.setEnd(endNode, endOff);
-    wrapRangeShared(range, h);
-  }
-
-  function wrapRangeShared(range, h) {
-    try {
-      const mark = document.createElement('mark');
-      mark.className = 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '');
-      mark.dataset.ocId = h.id;
-      range.surroundContents(mark);
-      mark.addEventListener('click', e => {
-        e.stopPropagation();
-        showSharedNoteBubble(mark, h);
-      });
-      return mark;
-    } catch {
-      return wrapRangeSharedMulti(range, h);
-    }
-  }
-
-  function wrapRangeSharedMulti(range, h) {
-    const textNodes = [];
-    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
-    let node;
-    while ((node = walker.nextNode())) {
-      if (range.intersectsNode(node)) textNodes.push(node);
-    }
-    if (!textNodes.length) return null;
-
-    let firstMark = null;
-    for (const tNode of textNodes) {
-      let start = 0, end = tNode.nodeValue.length;
-      if (tNode === range.startContainer) start = range.startOffset;
-      if (tNode === range.endContainer) end = range.endOffset;
-      if (start >= end) continue;
-
-      if (end < tNode.nodeValue.length) tNode.splitText(end);
-      const target = start > 0 ? tNode.splitText(start) : tNode;
-
-      const mark = document.createElement('mark');
-      mark.className = 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '');
-      mark.dataset.ocId = h.id;
-      target.parentNode.insertBefore(mark, target);
-      mark.appendChild(target);
-      mark.addEventListener('click', e => {
-        e.stopPropagation();
-        showSharedNoteBubble(mark, h);
-      });
-      if (!firstMark) firstMark = mark;
-    }
-    return firstMark;
   }
 
   function showSharedNoteBubble(anchor, h) {
@@ -1101,12 +1015,14 @@
       banner.remove();
       document.body.style.marginTop = '';
       // Remove shared highlights
+      const parentsToNormalize = new Set();
       document.querySelectorAll('.oc-highlight-shared').forEach(mark => {
         const parent = mark.parentNode;
         while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
         parent.removeChild(mark);
-        parent.normalize();
+        parentsToNormalize.add(parent);
       });
+      parentsToNormalize.forEach(p => p.normalize());
       // Clean the hash
       history.replaceState(null, '', location.pathname + location.search);
     });

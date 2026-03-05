@@ -257,10 +257,12 @@ document.getElementById('hl-share-btn').addEventListener('click', async () => {
   btn.disabled = true;
 
   try {
-    // Gather reading + highlights
-    const readingRes = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
+    // Gather reading + highlights concurrently
+    const [readingRes, hlRes] = await Promise.all([
+      chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey }),
+      chrome.storage.local.get([currentPageKey])
+    ]);
     const reading = readingRes?.reading || {};
-    const hlRes = await chrome.storage.local.get([currentPageKey]);
     const highlights = hlRes[currentPageKey] || [];
 
     const result = await shareAnnotations({

@@ -122,7 +122,9 @@ async function loadMyShares() {
       try {
         await deleteShare(btn.dataset.id);
         btn.closest('div').remove();
-      } catch {}
+      } catch (e) {
+        showAuthMsg(e.message || 'Failed to delete share', true);
+      }
     });
   });
 }

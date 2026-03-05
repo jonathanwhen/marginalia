@@ -1,4 +1,4 @@
-import { getSharedPage } from './lib/supabase.js';
+import { getSharedPage, getShareUrl } from './lib/supabase.js';
 
 const loadingEl = document.getElementById('loading');
 const contentEl = document.getElementById('content');
@@ -20,9 +20,7 @@ async function loadSharedPage(code) {
     // For web pages, redirect to the original URL with the share hash
     // so the content script can overlay highlights on the actual page.
     if (page.url && !page.url.startsWith('library:')) {
-      const url = new URL(page.url);
-      url.hash = `marginalia-share=${code}`;
-      location.href = url.toString();
+      location.href = getShareUrl(code, page.url);
       return;
     }
 
