@@ -697,17 +697,26 @@
     notifyHighlightChanged('delete', '', id);
   }
 
-  // ── Ensure a reading exists for this page (belt-and-suspenders) ──
-  // Called after every highlight save so the reading is guaranteed to
-  // exist even if the oc-highlight-changed message is lost.
+  // ── Ensure a reading exists for this page ──────────────────────
+  // Called after every highlight save so the reading is auto-created
+  // with rich metadata (author, estPages) even without opening the popup.
   function ensureReadingExists() {
     if (!isContextValid()) return;
     try {
+      const author =
+        document.querySelector('meta[name="author"]')?.content ||
+        document.querySelector('meta[property="article:author"]')?.content ||
+        document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
+        undefined;
+      const wordCount = document.body?.innerText?.split(/\s+/).length || 0;
+      const estPages = wordCount > 0 ? Math.max(1, Math.round(wordCount / 275)) : undefined;
       chrome.runtime.sendMessage({
         type: 'oc-upsert-reading',
         pageKey: pageKey(),
         title: document.title || pageKey(),
-        url: location.href
+        url: location.href,
+        author,
+        estPages
       });
     } catch (e) {}
   }
