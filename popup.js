@@ -122,8 +122,13 @@ async function autofill() {
   // }
 
   // Check if a reading already exists for this page
-  const response = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
-  const reading = response?.reading;
+  let reading;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: currentPageKey });
+    reading = response?.reading;
+  } catch (e) {
+    // Service worker may not be ready yet — continue with no existing reading
+  }
 
   // Estimate pages from word count (used for new readings or backfilling existing ones with 0)
   async function fetchEstPages() {
@@ -459,6 +464,6 @@ function escHtml(str) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────
-autofill();
+autofill().catch(() => {});
 updatePendingCount();
 updateTodayPages();
