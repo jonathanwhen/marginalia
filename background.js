@@ -267,7 +267,8 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
 // ── Handle highlight create/update/delete ───────────────────────────
 async function handleHighlightChanged({ pageKey, action, text, highlightId }, tab) {
   const readings = await getReadings();
-  if (!readings[pageKey] && (action === 'create' || action === 'update')) {
+  const isNew = !readings[pageKey];
+  if (isNew && (action === 'create' || action === 'update')) {
     const estPages = tab?.id ? await estimatePages(tab.id) : 0;
     await upsertReading({
       pageKey,
@@ -275,6 +276,12 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
       url: tab?.url || pageKey,
       estPages
     });
+    // Auto-log today's pages on first highlight so the reading is fully tracked
+    if (estPages > 0) {
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      await logPages(pageKey, today, estPages);
+    }
   }
   await touchReading(pageKey);
 }
