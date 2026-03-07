@@ -110,19 +110,21 @@ create policy "Users can delete their own PDFs"
 create index idx_library_pdfs_user_id on library_pdfs (user_id);
 
 -- Storage bucket for PDF files (private, per-user folders)
+-- Path format: {user_id}/{file_hash}-{byte_size}.pdf
 insert into storage.buckets (id, name, public) values ('library', 'library', false);
 
-create policy "Users can upload their own PDFs"
-  on storage.objects for insert with check (
-    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
-  );
+create policy "library_insert" on storage.objects for insert with check (
+  bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
+);
 
-create policy "Users can read their own PDFs"
-  on storage.objects for select using (
-    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
-  );
+create policy "library_select" on storage.objects for select using (
+  bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
+);
 
-create policy "Users can delete their own PDFs"
-  on storage.objects for delete using (
-    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
-  );
+create policy "library_update" on storage.objects for update using (
+  bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
+);
+
+create policy "library_delete" on storage.objects for delete using (
+  bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
+);

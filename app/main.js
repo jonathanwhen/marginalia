@@ -23,6 +23,14 @@ let syncInterval = null;
 // ── App lifecycle ───────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  // Branding: set dock icon on macOS
+  if (process.platform === 'darwin' && app.dock) {
+    const iconPath = path.join(__dirname, 'icon.png');
+    if (fs.existsSync(iconPath)) {
+      app.dock.setIcon(iconPath);
+    }
+  }
+
   storage.init();
   createWindow();
   buildMenu();
