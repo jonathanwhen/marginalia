@@ -90,6 +90,11 @@ function putTranscript(transcript) {
   return transcript.pageKey;
 }
 
+function getTranscriptMeta(pageKey) {
+  const meta = loadMeta();
+  return meta.find(m => m.pageKey === pageKey) || null;
+}
+
 function getAllTranscriptsMeta() {
   return loadMeta().map(m => ({ ...m }));
 }
@@ -133,6 +138,7 @@ function searchTranscripts(query) {
 
 module.exports = {
   getTranscript,
+  getTranscriptMeta,
   putTranscript,
   getAllTranscriptsMeta,
   deleteTranscript,

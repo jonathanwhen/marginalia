@@ -3,6 +3,10 @@ import { getAuthContext } from './lib/supabase.js';
 import { listRemotePdfs, uploadPdf, downloadPdf } from './lib/pdf-sync.js';
 import { getAllTranscriptsMeta, getTranscript, putTranscript } from './lib/db.js';
 
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const ALARM_NAME = 'oc-flush';
 const DAILY_ALARM = 'oc-daily-summary';
 const DEFAULT_FLUSH_INTERVAL = 60; // minutes
@@ -287,16 +291,14 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
       estPages
     });
     if (estPages > 0) {
-      const now = new Date();
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const today = localDateStr(new Date());
       await logPages(pageKey, today, estPages);
     }
   } else if (!existing.readingLog || Object.keys(existing.readingLog).length === 0) {
     // Reading exists (e.g., from library import) but has no log yet — auto-log
     const estPages = existing.estPages || (tab?.id ? await estimatePages(tab.id) : 0);
     if (estPages > 0) {
-      const now = new Date();
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const today = localDateStr(new Date());
       await logPages(pageKey, today, estPages);
     }
   }
@@ -330,7 +332,7 @@ async function logPages(pageKey, date, pages) {
 async function getTodayPages() {
   const readings = await getReadings();
   const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayStr = localDateStr(now);
   let pages = 0;
   let count = 0;
   for (const r of Object.values(readings)) {
@@ -344,7 +346,7 @@ async function getTodayPages() {
       if (!r.createdAt) continue;
       // Convert stored UTC createdAt to local date string for comparison
       const local = new Date(r.createdAt);
-      const localStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+      const localStr = localDateStr(local);
       if (localStr === todayStr) {
         pages += r.estPages || 0;
         count++;
@@ -1035,15 +1037,10 @@ async function syncReadings() {
 
   await updateBadge();
 
-  // Phase 4: Sync library PDFs via Supabase Storage
-  try {
-    const pdfResult = await syncLibraryPdfs();
-    if (pdfResult && (pdfResult.uploaded > 0 || pdfResult.downloaded > 0)) {
-      console.log(`PDF sync: ${pdfResult.uploaded} uploaded, ${pdfResult.downloaded} downloaded`);
-    }
-  } catch (e) {
-    console.error('Library PDF sync failed:', e);
-  }
+  // Phase 4: Sync library PDFs via Supabase Storage (fire-and-forget, don't block reading sync)
+  syncLibraryPdfs()
+    .then(r => { if (r && (r.uploaded > 0 || r.downloaded > 0)) console.log(`PDF sync: ${r.uploaded} uploaded, ${r.downloaded} downloaded`); })
+    .catch(e => console.error('Library PDF sync failed:', e));
 
   const synced = allOk ? changedKeys.length : 0;
   const failed = allOk ? 0 : changedKeys.length;

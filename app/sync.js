@@ -10,6 +10,10 @@ const libraryStorage = require('./library-storage');
 const SUPABASE_URL = 'https://lfvbrrxnjwanbniaegnf.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmdmJycnhuandhbmJuaWFlZ25mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NzAxMDYsImV4cCI6MjA4ODI0NjEwNn0.6NzXByK1y8FP-iCqYx6GCiuG6DsIvXpbkyqiCX_R1Os';
 
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // ── Reading helpers ──────────────────────────────────────────────────
 function getReadings() {
   const { ocReadings = {} } = storage.get('local', ['ocReadings']);
@@ -81,7 +85,7 @@ function logPages(pageKey, date, pages) {
 function getTodayPages() {
   const readings = getReadings();
   const now = new Date();
-  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const todayStr = localDateStr(now);
   let pages = 0, count = 0;
 
   for (const r of Object.values(readings)) {
@@ -90,7 +94,7 @@ function getTodayPages() {
       count++;
     } else if (r.createdAt) {
       const local = new Date(r.createdAt);
-      const localStr = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+      const localStr = localDateStr(local);
       if (localStr === todayStr) {
         pages += r.estPages || 0;
         count++;
@@ -305,15 +309,10 @@ async function syncReadings() {
     saveReadings(readings);
   }
 
-  // Sync library PDFs via Supabase Storage
-  try {
-    const pdfResult = await syncLibraryPdfs();
-    if (pdfResult && (pdfResult.uploaded > 0 || pdfResult.downloaded > 0)) {
-      console.log(`PDF sync: ${pdfResult.uploaded} uploaded, ${pdfResult.downloaded} downloaded`);
-    }
-  } catch (e) {
-    console.error('Library PDF sync failed:', e);
-  }
+  // Sync library PDFs via Supabase Storage (fire-and-forget, don't block reading sync)
+  syncLibraryPdfs()
+    .then(r => { if (r && (r.uploaded > 0 || r.downloaded > 0)) console.log(`PDF sync: ${r.uploaded} uploaded, ${r.downloaded} downloaded`); })
+    .catch(e => console.error('Library PDF sync failed:', e));
 
   return { synced: allOk ? changedKeys.length : 0, failed: allOk ? 0 : changedKeys.length, githubOk, telegramOk };
 }
@@ -392,7 +391,10 @@ async function getSupabaseAuth() {
         }
       });
       return { token: data.access_token, userId: data.user.id };
-    } catch { return null; }
+    } catch (e) {
+      console.error('Supabase token refresh failed:', e);
+      return null;
+    }
   }
 
   return { token: ocSupabaseSession.access_token, userId: ocSupabaseSession.user.id };
@@ -435,7 +437,7 @@ async function syncLibraryPdfs() {
       });
       if (!upRes.ok) continue;
 
-      await fetch(`${SUPABASE_URL}/rest/v1/library_pdfs`, {
+      const metaRes = await fetch(`${SUPABASE_URL}/rest/v1/library_pdfs`, {
         method: 'POST',
         headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
         body: JSON.stringify({
@@ -446,6 +448,10 @@ async function syncLibraryPdfs() {
           storage_path: storagePath, updated_at: new Date().toISOString()
         })
       });
+      if (!metaRes.ok) {
+        console.error(`PDF metadata upsert failed for ${meta.pageKey}: ${metaRes.status}`);
+        continue;
+      }
       uploaded++;
     } catch (e) {
       console.error(`PDF upload failed for ${meta.pageKey}:`, e);
@@ -501,8 +507,7 @@ function handleMessage(msg) {
         const existing = readings[msg.pageKey];
         if (!existing) {
           // Auto-create reading — look up library metadata for page count
-          const allMeta = libraryStorage.getAllTranscriptsMeta();
-          const meta = allMeta.find(t => t.pageKey === msg.pageKey);
+          const meta = libraryStorage.getTranscriptMeta(msg.pageKey);
           upsertReading({
             pageKey: msg.pageKey,
             title: meta?.title || msg.pageKey,
@@ -512,7 +517,7 @@ function handleMessage(msg) {
           });
           if (meta?.pageCount > 0) {
             const now = new Date();
-            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            const today = localDateStr(now);
             logPages(msg.pageKey, today, meta.pageCount);
           }
         } else if (!existing.readingLog || Object.keys(existing.readingLog).length === 0) {
@@ -520,7 +525,7 @@ function handleMessage(msg) {
           const estPages = existing.estPages || 0;
           if (estPages > 0) {
             const now = new Date();
-            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            const today = localDateStr(now);
             logPages(msg.pageKey, today, estPages);
           }
         }
