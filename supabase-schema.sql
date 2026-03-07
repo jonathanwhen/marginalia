@@ -70,3 +70,59 @@ create index idx_shared_pages_share_code on shared_pages (share_code);
 
 -- Index for user's shares listing
 create index idx_shared_pages_user_id on shared_pages (user_id);
+
+-- 3. Library PDF sync
+-- Tracks which PDFs each user has in Supabase Storage so Chrome and Electron
+-- can sync their libraries automatically.
+
+create table library_pdfs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references profiles(id) on delete cascade not null,
+  page_key text not null,
+  file_hash text not null default '',
+  byte_size integer not null default 0,
+  title text default '',
+  author text default '',
+  file_name text default '',
+  page_count integer default 0,
+  word_count integer default 0,
+  tags text[] default '{}',
+  storage_path text not null,
+  uploaded_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(user_id, page_key)
+);
+
+alter table library_pdfs enable row level security;
+
+create policy "Users can view their own PDFs"
+  on library_pdfs for select using (auth.uid() = user_id);
+
+create policy "Users can insert their own PDFs"
+  on library_pdfs for insert with check (auth.uid() = user_id);
+
+create policy "Users can update their own PDFs"
+  on library_pdfs for update using (auth.uid() = user_id);
+
+create policy "Users can delete their own PDFs"
+  on library_pdfs for delete using (auth.uid() = user_id);
+
+create index idx_library_pdfs_user_id on library_pdfs (user_id);
+
+-- Storage bucket for PDF files (private, per-user folders)
+insert into storage.buckets (id, name, public) values ('library', 'library', false);
+
+create policy "Users can upload their own PDFs"
+  on storage.objects for insert with check (
+    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can read their own PDFs"
+  on storage.objects for select using (
+    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can delete their own PDFs"
+  on storage.objects for delete using (
+    bucket_id = 'library' and auth.uid()::text = (storage.foldername(name))[1]
+  );

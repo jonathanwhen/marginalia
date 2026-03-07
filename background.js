@@ -1,4 +1,7 @@
 import { classifyReading } from './lib/classify.js';
+import { getAuthContext } from './lib/supabase.js';
+import { listRemotePdfs, uploadPdf, downloadPdf } from './lib/pdf-sync.js';
+import { getAllTranscriptsMeta, getTranscript, putTranscript } from './lib/db.js';
 
 const ALARM_NAME = 'oc-flush';
 const DAILY_ALARM = 'oc-daily-summary';
@@ -266,9 +269,16 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
 
 // ── Handle highlight create/update/delete ───────────────────────────
 async function handleHighlightChanged({ pageKey, action, text, highlightId }, tab) {
+  if (action !== 'create' && action !== 'update') {
+    await touchReading(pageKey);
+    return;
+  }
+
   const readings = await getReadings();
-  const isNew = !readings[pageKey];
-  if (isNew && (action === 'create' || action === 'update')) {
+  const existing = readings[pageKey];
+
+  if (!existing) {
+    // Auto-create reading on first highlight
     const estPages = tab?.id ? await estimatePages(tab.id) : 0;
     await upsertReading({
       pageKey,
@@ -276,13 +286,21 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
       url: tab?.url || pageKey,
       estPages
     });
-    // Auto-log today's pages on first highlight so the reading is fully tracked
+    if (estPages > 0) {
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      await logPages(pageKey, today, estPages);
+    }
+  } else if (!existing.readingLog || Object.keys(existing.readingLog).length === 0) {
+    // Reading exists (e.g., from library import) but has no log yet — auto-log
+    const estPages = existing.estPages || (tab?.id ? await estimatePages(tab.id) : 0);
     if (estPages > 0) {
       const now = new Date();
       const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       await logPages(pageKey, today, estPages);
     }
   }
+
   await touchReading(pageKey);
 }
 
@@ -816,6 +834,69 @@ async function syncMarkdownNotes(ghToken, ghOwner, ghRepo, ghNotesDir, changedKe
   return { pushed, failed };
 }
 
+// ── Library PDF sync via Supabase ─────────────────────────────────────
+async function syncLibraryPdfs() {
+  const auth = await getAuthContext();
+  if (!auth) return null;
+
+  const { token, userId } = auth;
+
+  const remotePdfs = await listRemotePdfs(token, userId);
+  const remoteByKey = new Map(remotePdfs.map(p => [p.page_key, p]));
+
+  const localMeta = await getAllTranscriptsMeta();
+  const localKeys = new Set(localMeta.map(t => t.pageKey));
+
+  let uploaded = 0, downloaded = 0;
+
+  // Upload local PDFs not yet in Supabase
+  for (const meta of localMeta) {
+    if (remoteByKey.has(meta.pageKey)) continue;
+    try {
+      const transcript = await getTranscript(meta.pageKey);
+      if (!transcript?.pdfData) continue;
+      await uploadPdf(token, userId, {
+        pageKey: meta.pageKey, fileHash: meta.fileHash, byteSize: meta.byteSize,
+        title: meta.title, author: meta.author, fileName: meta.fileName,
+        pageCount: meta.pageCount, wordCount: meta.wordCount, tags: meta.tags,
+        pdfData: transcript.pdfData
+      });
+      uploaded++;
+    } catch (e) {
+      console.error(`PDF upload failed for ${meta.pageKey}:`, e);
+    }
+  }
+
+  // Download remote PDFs missing locally
+  for (const remote of remotePdfs) {
+    if (localKeys.has(remote.page_key)) continue;
+    try {
+      const pdfData = await downloadPdf(token, remote.storage_path);
+      await putTranscript({
+        pageKey: remote.page_key,
+        title: remote.title || '', author: remote.author || '',
+        pdfData: new Uint8Array(pdfData), content: '',
+        fileName: remote.file_name || '', fileHash: remote.file_hash || '',
+        byteSize: remote.byte_size || 0, pageCount: remote.page_count || 0,
+        wordCount: remote.word_count || 0, tags: remote.tags || [],
+        importedAt: remote.uploaded_at || new Date().toISOString(),
+        format: 'pdf'
+      });
+      // Create reading entry so it shows on dashboard
+      await upsertReading({
+        pageKey: remote.page_key, title: remote.title || '',
+        author: remote.author || '', url: remote.page_key,
+        tags: remote.tags || [], estPages: remote.page_count || 0
+      });
+      downloaded++;
+    } catch (e) {
+      console.error(`PDF download failed for ${remote.page_key}:`, e);
+    }
+  }
+
+  return { uploaded, downloaded };
+}
+
 // ── syncReadings() — replaces flushOutbox() ─────────────────────────
 async function syncReadings() {
   const { botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir } =
@@ -953,6 +1034,16 @@ async function syncReadings() {
   }
 
   await updateBadge();
+
+  // Phase 4: Sync library PDFs via Supabase Storage
+  try {
+    const pdfResult = await syncLibraryPdfs();
+    if (pdfResult && (pdfResult.uploaded > 0 || pdfResult.downloaded > 0)) {
+      console.log(`PDF sync: ${pdfResult.uploaded} uploaded, ${pdfResult.downloaded} downloaded`);
+    }
+  } catch (e) {
+    console.error('Library PDF sync failed:', e);
+  }
 
   const synced = allOk ? changedKeys.length : 0;
   const failed = allOk ? 0 : changedKeys.length;

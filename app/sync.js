@@ -4,6 +4,11 @@
  */
 
 const storage = require('./storage');
+const libraryStorage = require('./library-storage');
+
+// ── Supabase config (PDF sync) ───────────────────────────────────────
+const SUPABASE_URL = 'https://lfvbrrxnjwanbniaegnf.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxmdmJycnhuandhbmJuaWFlZ25mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2NzAxMDYsImV4cCI6MjA4ODI0NjEwNn0.6NzXByK1y8FP-iCqYx6GCiuG6DsIvXpbkyqiCX_R1Os';
 
 // ── Reading helpers ──────────────────────────────────────────────────
 function getReadings() {
@@ -300,6 +305,16 @@ async function syncReadings() {
     saveReadings(readings);
   }
 
+  // Sync library PDFs via Supabase Storage
+  try {
+    const pdfResult = await syncLibraryPdfs();
+    if (pdfResult && (pdfResult.uploaded > 0 || pdfResult.downloaded > 0)) {
+      console.log(`PDF sync: ${pdfResult.uploaded} uploaded, ${pdfResult.downloaded} downloaded`);
+    }
+  } catch (e) {
+    console.error('Library PDF sync failed:', e);
+  }
+
   return { synced: allOk ? changedKeys.length : 0, failed: allOk ? 0 : changedKeys.length, githubOk, telegramOk };
 }
 
@@ -354,6 +369,124 @@ async function restoreFromGitHub() {
   }
 }
 
+// ── Supabase auth helper ─────────────────────────────────────────────
+async function getSupabaseAuth() {
+  const { ocSupabaseSession } = storage.get('local', ['ocSupabaseSession']);
+  if (!ocSupabaseSession) return null;
+
+  const expiresAt = ocSupabaseSession.expires_at || 0;
+  if (Date.now() / 1000 > expiresAt - 60) {
+    // Refresh expired token
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
+        body: JSON.stringify({ refresh_token: ocSupabaseSession.refresh_token })
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      storage.set('local', {
+        ocSupabaseSession: {
+          access_token: data.access_token, refresh_token: data.refresh_token,
+          expires_at: data.expires_at, user: data.user
+        }
+      });
+      return { token: data.access_token, userId: data.user.id };
+    } catch { return null; }
+  }
+
+  return { token: ocSupabaseSession.access_token, userId: ocSupabaseSession.user.id };
+}
+
+// ── Library PDF sync via Supabase ────────────────────────────────────
+async function syncLibraryPdfs() {
+  const auth = await getSupabaseAuth();
+  if (!auth) return null;
+
+  const { token, userId } = auth;
+  const sbHeaders = { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${token}` };
+
+  // List remote PDFs
+  const listRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/library_pdfs?user_id=eq.${userId}&select=page_key,file_hash,byte_size,title,author,file_name,page_count,word_count,tags,storage_path,uploaded_at`,
+    { headers: sbHeaders }
+  );
+  if (!listRes.ok) return null;
+  const remotePdfs = await listRes.json();
+  const remoteByKey = new Map(remotePdfs.map(p => [p.page_key, p]));
+
+  const localMeta = libraryStorage.getAllTranscriptsMeta();
+  const localKeys = new Set(localMeta.map(t => t.pageKey));
+
+  let uploaded = 0, downloaded = 0;
+
+  // Upload local PDFs not yet in Supabase
+  for (const meta of localMeta) {
+    if (remoteByKey.has(meta.pageKey)) continue;
+    try {
+      const transcript = libraryStorage.getTranscript(meta.pageKey);
+      if (!transcript?.pdfData) continue;
+      const storagePath = `${userId}/${meta.fileHash}-${meta.byteSize}.pdf`;
+
+      const upRes = await fetch(`${SUPABASE_URL}/storage/v1/object/library/${storagePath}`, {
+        method: 'POST',
+        headers: { ...sbHeaders, 'Content-Type': 'application/pdf', 'x-upsert': 'true' },
+        body: Buffer.from(transcript.pdfData)
+      });
+      if (!upRes.ok) continue;
+
+      await fetch(`${SUPABASE_URL}/rest/v1/library_pdfs`, {
+        method: 'POST',
+        headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          user_id: userId, page_key: meta.pageKey, file_hash: meta.fileHash || '',
+          byte_size: meta.byteSize || 0, title: meta.title || '', author: meta.author || '',
+          file_name: meta.fileName || '', page_count: meta.pageCount || 0,
+          word_count: meta.wordCount || 0, tags: meta.tags || [],
+          storage_path: storagePath, updated_at: new Date().toISOString()
+        })
+      });
+      uploaded++;
+    } catch (e) {
+      console.error(`PDF upload failed for ${meta.pageKey}:`, e);
+    }
+  }
+
+  // Download remote PDFs missing locally
+  for (const remote of remotePdfs) {
+    if (localKeys.has(remote.page_key)) continue;
+    try {
+      const dlRes = await fetch(`${SUPABASE_URL}/storage/v1/object/library/${remote.storage_path}`, {
+        headers: sbHeaders
+      });
+      if (!dlRes.ok) continue;
+      const pdfData = await dlRes.arrayBuffer();
+
+      libraryStorage.putTranscript({
+        pageKey: remote.page_key, title: remote.title || '', author: remote.author || '',
+        pdfData: new Uint8Array(pdfData), content: '',
+        fileName: remote.file_name || '', fileHash: remote.file_hash || '',
+        byteSize: remote.byte_size || 0, pageCount: remote.page_count || 0,
+        wordCount: remote.word_count || 0, tags: remote.tags || [],
+        importedAt: remote.uploaded_at || new Date().toISOString(),
+        format: 'pdf'
+      });
+
+      // Create reading entry
+      upsertReading({
+        pageKey: remote.page_key, title: remote.title || '',
+        author: remote.author || '', url: remote.page_key,
+        tags: remote.tags || [], estPages: remote.page_count || 0
+      });
+      downloaded++;
+    } catch (e) {
+      console.error(`PDF download failed for ${remote.page_key}:`, e);
+    }
+  }
+
+  return { uploaded, downloaded };
+}
+
 // ── Message router ───────────────────────────────────────────────────
 function handleMessage(msg) {
   switch (msg.type) {
@@ -363,6 +496,35 @@ function handleMessage(msg) {
       return { reading: readings[msg.pageKey] || null };
     }
     case 'oc-highlight-changed': {
+      if (msg.action === 'create' || msg.action === 'update') {
+        const readings = getReadings();
+        const existing = readings[msg.pageKey];
+        if (!existing) {
+          // Auto-create reading — look up library metadata for page count
+          const allMeta = libraryStorage.getAllTranscriptsMeta();
+          const meta = allMeta.find(t => t.pageKey === msg.pageKey);
+          upsertReading({
+            pageKey: msg.pageKey,
+            title: meta?.title || msg.pageKey,
+            url: msg.pageKey,
+            tags: meta?.tags || [],
+            estPages: meta?.pageCount || 0
+          });
+          if (meta?.pageCount > 0) {
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            logPages(msg.pageKey, today, meta.pageCount);
+          }
+        } else if (!existing.readingLog || Object.keys(existing.readingLog).length === 0) {
+          // Reading exists but no log — auto-log on first highlight
+          const estPages = existing.estPages || 0;
+          if (estPages > 0) {
+            const now = new Date();
+            const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+            logPages(msg.pageKey, today, estPages);
+          }
+        }
+      }
       touchReading(msg.pageKey);
       return { ok: true };
     }
