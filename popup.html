@@ -86,16 +86,9 @@
     .hl-quote { color: #e8a87c; font-style: italic; margin-bottom: 3px; }
     .hl-comment { color: #888; }
     .hl-latex { margin: 3px 0; }
-    .hl-latex code {
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 10px;
-      background: #1a1a1a;
-      color: #6fcf97;
-      padding: 2px 6px;
-      border-radius: 3px;
-      display: inline-block;
-      word-break: break-all;
-    }
+    .hl-latex .katex { color: #e0e0e0; font-size: 0.9em; }
+    .hl-comment .katex { color: #aaa; }
+    .katex-display { margin: 3px 0; overflow-x: auto; }
     .hl-delete {
       flex-shrink: 0; background: none; border: none; color: #555; cursor: pointer;
       font-size: 13px; padding: 0 2px; line-height: 1; transition: color 0.15s;
@@ -103,6 +96,7 @@
     .hl-delete:hover { color: #eb5757; }
     .hl-empty { color: #444; font-size: 11px; padding: 16px 0; text-align: center; }
   </style>
+  <link rel="stylesheet" href="lib/katex.min.css">
 </head>
 <body>
   <div class="header">
@@ -195,6 +189,7 @@
     <a href="#" class="settings-link" id="open-settings">⚙ Settings</a>
   </div>
 
+  <script src="lib/katex.min.js"></script>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

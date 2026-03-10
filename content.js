@@ -23,6 +23,85 @@
     return div.innerHTML;
   }
 
+  // ── KaTeX loading for content script ──────────────────────────────
+  // KaTeX JS/CSS are bundled in lib/ and declared as web_accessible_resources.
+  // We load them on demand so math rendering works in note bubbles and popups.
+  let katexLoaded = false;
+  let katexLoadPromise = null;
+
+  function ensureKatex() {
+    if (katexLoaded && typeof katex !== 'undefined') return Promise.resolve();
+    if (katexLoadPromise) return katexLoadPromise;
+    katexLoadPromise = new Promise((resolve) => {
+      try {
+        // Load CSS
+        if (!document.querySelector('link[data-oc-katex]')) {
+          const link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = chrome.runtime.getURL('lib/katex.min.css');
+          link.dataset.ocKatex = '1';
+          document.head.appendChild(link);
+        }
+        // Load JS
+        if (typeof katex !== 'undefined') {
+          katexLoaded = true;
+          resolve();
+          return;
+        }
+        const script = document.createElement('script');
+        script.src = chrome.runtime.getURL('lib/katex.min.js');
+        script.onload = () => { katexLoaded = true; resolve(); };
+        script.onerror = () => resolve(); // degrade gracefully
+        document.head.appendChild(script);
+      } catch {
+        resolve(); // degrade gracefully if extension context is invalid
+      }
+    });
+    return katexLoadPromise;
+  }
+
+  // Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
+  function renderLatex(tex) {
+    if (!tex || typeof katex === 'undefined') return `<code>${escHtml(tex)}</code>`;
+    try {
+      return katex.renderToString(tex, { throwOnError: false, displayMode: false });
+    } catch {
+      return `<code>${escHtml(tex)}</code>`;
+    }
+  }
+
+  // Process text containing inline $...$ or display $$...$$ math and render via KaTeX.
+  function renderMathInText(text) {
+    if (!text || typeof katex === 'undefined') return escHtml(text);
+    let result = '';
+    let i = 0;
+    while (i < text.length) {
+      if (text[i] === '$' && text[i + 1] === '$') {
+        const end = text.indexOf('$$', i + 2);
+        if (end !== -1) {
+          const tex = text.slice(i + 2, end);
+          try { result += katex.renderToString(tex, { throwOnError: false, displayMode: true }); }
+          catch { result += '$$' + escHtml(tex) + '$$'; }
+          i = end + 2;
+          continue;
+        }
+      }
+      if (text[i] === '$' && (i === 0 || text[i - 1] !== '$')) {
+        const end = text.indexOf('$', i + 1);
+        if (end !== -1 && !text.slice(i + 1, end).includes('\n')) {
+          const tex = text.slice(i + 1, end);
+          try { result += katex.renderToString(tex, { throwOnError: false, displayMode: false }); }
+          catch { result += '$' + escHtml(tex) + '$'; }
+          i = end + 1;
+          continue;
+        }
+      }
+      result += escHtml(text[i]);
+      i++;
+    }
+    return result;
+  }
+
   // ── Storage helpers ──────────────────────────────────────────────
   function isContextValid() {
     try { return !!chrome.runtime?.id; } catch { return false; }
@@ -326,6 +405,7 @@
   function enterHighlightMode() {
     if (highlightMode) return;
     highlightMode = true;
+    ensureKatex(); // preload KaTeX so it's ready for note bubbles
     removeToolbar();
     removeNoteBubble();
     removeAnnotationPopup();
@@ -398,6 +478,7 @@
     annotationPopup.id = 'oc-annotation-popup';
     annotationPopup.innerHTML = `
       <input type="text" placeholder="Add a note... (Enter to save, Esc to skip)" class="oc-ann-input" />
+      <div class="oc-ann-hint">Use $...$ for math</div>
     `;
     document.body.appendChild(annotationPopup);
 
@@ -479,23 +560,29 @@
   // ── Note bubble (click existing highlight to view/edit/delete) ─
   function showNoteBubble(anchor, h) {
     removeNoteBubble();
+    ensureKatex().then(() => renderNoteBubbleContent(anchor, h));
+  }
+
+  function renderNoteBubbleContent(anchor, h) {
+    removeNoteBubble(); // guard against race if called twice
     const hasComment = !!h.comment;
     noteBubble = document.createElement('div');
     noteBubble.id = 'oc-note-bubble';
     noteBubble.innerHTML = `
-      <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text)}</div>
-      ${h.latex ? `<div class="oc-nb-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
-      ${hasComment ? `<div class="oc-nb-comment">${escHtml(h.comment)}</div>` : ''}
+      <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
+      ${h.latex ? `<div class="oc-nb-latex">${renderLatex(h.latex)}</div>` : ''}
+      ${hasComment ? `<div class="oc-nb-comment">${renderMathInText(h.comment)}</div>` : ''}
       <div class="oc-nb-edit-section" style="display:none;">
-        <textarea class="oc-nb-edit-input" placeholder="Add a note...">${escHtml(h.comment || '')}</textarea>
+        <textarea class="oc-nb-edit-input" placeholder="Add a note... (use $...$ for math)">${escHtml(h.comment || '')}</textarea>
+        <div class="oc-nb-edit-hint">Use $...$ for inline math, $$...$$ for display math</div>
         <div class="oc-nb-edit-actions">
           <button class="oc-nb-edit-save">Save</button>
           <button class="oc-nb-edit-cancel">Cancel</button>
         </div>
       </div>
       <div class="oc-nb-actions">
-        <span class="oc-nb-edit-btn">${hasComment ? '✎ Edit note' : '✎ Add note'}</span>
-        <span class="oc-nb-delete">✕ Remove</span>
+        <span class="oc-nb-edit-btn">${hasComment ? '\u270e Edit note' : '\u270e Add note'}</span>
+        <span class="oc-nb-delete">\u2715 Remove</span>
       </div>
     `;
     document.body.appendChild(noteBubble);
@@ -878,13 +965,17 @@
         return;
       }
 
-      listEl.innerHTML = highlights.map(h => `
-        <div class="oc-sb-hl-item">
-          <div class="oc-sb-hl-quote">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '…' : h.text)}"</div>
-          ${h.latex ? `<div class="oc-sb-hl-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
-          ${h.comment ? `<div class="oc-sb-hl-comment">— ${escHtml(h.comment)}</div>` : ''}
-        </div>
-      `).join('');
+      // Ensure KaTeX is loaded before rendering sidebar highlights with math
+      ensureKatex().then(() => {
+        if (!sidebar) return; // may have closed during load
+        listEl.innerHTML = highlights.map(h => `
+          <div class="oc-sb-hl-item">
+            <div class="oc-sb-hl-quote">"${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}"</div>
+            ${h.latex ? `<div class="oc-sb-hl-latex">${renderLatex(h.latex)}</div>` : ''}
+            ${h.comment ? `<div class="oc-sb-hl-comment">\u2014 ${renderMathInText(h.comment)}</div>` : ''}
+          </div>
+        `).join('');
+      });
     });
   }
 
@@ -989,22 +1080,25 @@
 
   function showSharedNoteBubble(anchor, h) {
     removeNoteBubble();
-    noteBubble = document.createElement('div');
-    noteBubble.id = 'oc-note-bubble';
-    noteBubble.innerHTML = `
-      <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
-      ${h.latex ? `<div class="oc-nb-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
-      ${h.comment ? `<div class="oc-nb-comment">${escHtml(h.comment)}</div>` : ''}
-      <div style="margin-top:6px; padding-top:6px; border-top:1px solid #222; font-size:10px; color:#555;">Shared annotation (read-only)</div>
-    `;
-    document.body.appendChild(noteBubble);
+    ensureKatex().then(() => {
+      removeNoteBubble(); // guard against race
+      noteBubble = document.createElement('div');
+      noteBubble.id = 'oc-note-bubble';
+      noteBubble.innerHTML = `
+        <div class="oc-nb-quote">${escHtml(h.text.length > 120 ? h.text.slice(0, 120) + '\u2026' : h.text)}</div>
+        ${h.latex ? `<div class="oc-nb-latex">${renderLatex(h.latex)}</div>` : ''}
+        ${h.comment ? `<div class="oc-nb-comment">${renderMathInText(h.comment)}</div>` : ''}
+        <div style="margin-top:6px; padding-top:6px; border-top:1px solid #222; font-size:10px; color:#555;">Shared annotation (read-only)</div>
+      `;
+      document.body.appendChild(noteBubble);
 
-    const rect = anchor.getBoundingClientRect();
-    let nx = rect.left + window.scrollX;
-    let ny = rect.bottom + window.scrollY + 8;
-    nx = Math.max(8, Math.min(nx, window.innerWidth - 270));
-    noteBubble.style.left = nx + 'px';
-    noteBubble.style.top = ny + 'px';
+      const rect = anchor.getBoundingClientRect();
+      let nx = rect.left + window.scrollX;
+      let ny = rect.bottom + window.scrollY + 8;
+      nx = Math.max(8, Math.min(nx, window.innerWidth - 270));
+      noteBubble.style.left = nx + 'px';
+      noteBubble.style.top = ny + 'px';
+    });
   }
 
   function showShareBanner(sharedBy, title, highlightCount) {

@@ -5,6 +5,60 @@ function esc(str) {
   return div.innerHTML;
 }
 
+// ── LaTeX rendering helpers ─────────────────────────────────────
+// Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
+function renderLatex(tex) {
+  if (!tex || typeof katex === 'undefined') return `<code>${esc(tex)}</code>`;
+  try {
+    return katex.renderToString(tex, { throwOnError: false, displayMode: false });
+  } catch {
+    return `<code>${esc(tex)}</code>`;
+  }
+}
+
+// Process text that may contain inline $...$ or display $$...$$ math delimiters.
+// Returns an HTML string with math segments rendered via KaTeX.
+function renderMathInText(text) {
+  if (!text || typeof katex === 'undefined') return esc(text);
+  // Escape the text first, then replace math delimiters in the escaped output.
+  // We work on the raw text to find delimiters, then build output piecewise.
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    // Display math: $$...$$
+    if (text[i] === '$' && text[i + 1] === '$') {
+      const end = text.indexOf('$$', i + 2);
+      if (end !== -1) {
+        const tex = text.slice(i + 2, end);
+        try {
+          result += katex.renderToString(tex, { throwOnError: false, displayMode: true });
+        } catch {
+          result += '$$' + esc(tex) + '$$';
+        }
+        i = end + 2;
+        continue;
+      }
+    }
+    // Inline math: $...$  (not preceded by another $, content must not contain newlines)
+    if (text[i] === '$' && (i === 0 || text[i - 1] !== '$')) {
+      const end = text.indexOf('$', i + 1);
+      if (end !== -1 && !text.slice(i + 1, end).includes('\n')) {
+        const tex = text.slice(i + 1, end);
+        try {
+          result += katex.renderToString(tex, { throwOnError: false, displayMode: false });
+        } catch {
+          result += '$' + esc(tex) + '$';
+        }
+        i = end + 1;
+        continue;
+      }
+    }
+    result += esc(text[i]);
+    i++;
+  }
+  return result;
+}
+
 // ── Tag color palette ────────────────────────────────────────────
 const TAG_COLORS = {
   'AI/ML Research':     '#e8a87c',
@@ -550,7 +604,8 @@ async function toggleDetail(tr, detailTr, reading) {
     for (const h of highlights) {
       hlHtml += '<li class="detail-hl-item">';
       hlHtml += `<div class="detail-hl-quote">"${esc(h.text)}"</div>`;
-      if (h.comment) hlHtml += `<div class="detail-hl-comment">${esc(h.comment)}</div>`;
+      if (h.latex) hlHtml += `<div class="detail-hl-latex">${renderLatex(h.latex)}</div>`;
+      if (h.comment) hlHtml += `<div class="detail-hl-comment">${renderMathInText(h.comment)}</div>`;
       hlHtml += '</li>';
     }
     hlHtml += '</ul>';

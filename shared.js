@@ -77,8 +77,8 @@ function renderPage(page) {
       const colorClass = h.color && h.color !== 'orange' ? ` ${h.color}` : '';
       html += `<div class="highlight-card${colorClass}">`;
       html += `<div class="hl-text">"${esc(h.text)}"</div>`;
-      if (h.latex) html += `<div class="hl-latex"><code>${esc(h.latex)}</code></div>`;
-      if (h.comment) html += `<div class="hl-comment">${esc(h.comment)}</div>`;
+      if (h.latex) html += `<div class="hl-latex">${renderLatex(h.latex)}</div>`;
+      if (h.comment) html += `<div class="hl-comment">${renderMathInText(h.comment)}</div>`;
       const meta = [];
       if (h.pageIndex != null) meta.push(`Page ${h.pageIndex + 1}`);
       if (h.timestamp) meta.push(new Date(h.timestamp).toLocaleDateString());
@@ -106,4 +106,46 @@ function esc(str) {
   const div = document.createElement('div');
   div.textContent = str || '';
   return div.innerHTML;
+}
+
+// Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
+function renderLatex(tex) {
+  if (!tex || typeof katex === 'undefined') return `<code>${esc(tex)}</code>`;
+  try {
+    return katex.renderToString(tex, { throwOnError: false, displayMode: false });
+  } catch {
+    return `<code>${esc(tex)}</code>`;
+  }
+}
+
+// Process text containing inline $...$ or display $$...$$ math and render via KaTeX.
+function renderMathInText(text) {
+  if (!text || typeof katex === 'undefined') return esc(text);
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '$' && text[i + 1] === '$') {
+      const end = text.indexOf('$$', i + 2);
+      if (end !== -1) {
+        const tex = text.slice(i + 2, end);
+        try { result += katex.renderToString(tex, { throwOnError: false, displayMode: true }); }
+        catch { result += '$$' + esc(tex) + '$$'; }
+        i = end + 2;
+        continue;
+      }
+    }
+    if (text[i] === '$' && (i === 0 || text[i - 1] !== '$')) {
+      const end = text.indexOf('$', i + 1);
+      if (end !== -1 && !text.slice(i + 1, end).includes('\n')) {
+        const tex = text.slice(i + 1, end);
+        try { result += katex.renderToString(tex, { throwOnError: false, displayMode: false }); }
+        catch { result += '$' + esc(tex) + '$'; }
+        i = end + 1;
+        continue;
+      }
+    }
+    result += esc(text[i]);
+    i++;
+  }
+  return result;
 }

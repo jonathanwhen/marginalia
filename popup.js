@@ -310,8 +310,8 @@ async function loadHighlights() {
     <div class="hl-item" data-hl-id="${escHtml(h.id)}">
       <div class="hl-item-content">
         <div class="hl-quote">"${escHtml(h.text.length > 100 ? h.text.slice(0, 100) + '\u2026' : h.text)}"</div>
-        ${h.latex ? `<div class="hl-latex"><code>${escHtml(h.latex)}</code></div>` : ''}
-        ${h.comment ? `<div class="hl-comment">${escHtml(h.comment)}</div>` : ''}
+        ${h.latex ? `<div class="hl-latex">${renderLatex(h.latex)}</div>` : ''}
+        ${h.comment ? `<div class="hl-comment">${renderMathInText(h.comment)}</div>` : ''}
       </div>
       <button class="hl-delete" title="Remove highlight">\u00d7</button>
     </div>
@@ -461,6 +461,48 @@ function escHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
+function renderLatex(tex) {
+  if (!tex || typeof katex === 'undefined') return `<code>${escHtml(tex)}</code>`;
+  try {
+    return katex.renderToString(tex, { throwOnError: false, displayMode: false });
+  } catch {
+    return `<code>${escHtml(tex)}</code>`;
+  }
+}
+
+// Process text containing inline $...$ or display $$...$$ math and render via KaTeX.
+function renderMathInText(text) {
+  if (!text || typeof katex === 'undefined') return escHtml(text);
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '$' && text[i + 1] === '$') {
+      const end = text.indexOf('$$', i + 2);
+      if (end !== -1) {
+        const tex = text.slice(i + 2, end);
+        try { result += katex.renderToString(tex, { throwOnError: false, displayMode: true }); }
+        catch { result += '$$' + escHtml(tex) + '$$'; }
+        i = end + 2;
+        continue;
+      }
+    }
+    if (text[i] === '$' && (i === 0 || text[i - 1] !== '$')) {
+      const end = text.indexOf('$', i + 1);
+      if (end !== -1 && !text.slice(i + 1, end).includes('\n')) {
+        const tex = text.slice(i + 1, end);
+        try { result += katex.renderToString(tex, { throwOnError: false, displayMode: false }); }
+        catch { result += '$' + escHtml(tex) + '$'; }
+        i = end + 1;
+        continue;
+      }
+    }
+    result += escHtml(text[i]);
+    i++;
+  }
+  return result;
 }
 
 // ── Init ──────────────────────────────────────────────────────────
