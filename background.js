@@ -2,6 +2,7 @@ import { classifyReading } from './lib/classify.js';
 import { getAuthContext } from './lib/supabase.js';
 import { listRemotePdfs, uploadPdf, downloadPdf } from './lib/pdf-sync.js';
 import { getAllTranscriptsMeta, getTranscript, putTranscript } from './lib/db.js';
+import { createCollabPage, joinCollabPage, pushAnnotation, pullAnnotations, deleteAnnotation, getCollabForPage, subscribeToAnnotations } from './lib/collab.js';
 
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -254,6 +255,79 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg.type === 'oc-get-concepts') {
     chrome.storage.local.get('ocConcepts', ({ ocConcepts }) => sendResponse(ocConcepts || { readings: {}, edges: [] }));
+    return true;
+  }
+
+  // ── Collaborative annotations ─────────────────────────────────────
+  if (msg.type === 'oc-get-auth') {
+    getAuthContext().then(auth => {
+      if (!auth) return sendResponse(null);
+      // Include display name from stored session for collab
+      chrome.storage.local.get('ocSupabaseSession', ({ ocSupabaseSession }) => {
+        const displayName = ocSupabaseSession?.user?.user_metadata?.display_name
+          || ocSupabaseSession?.user?.email
+          || 'Anonymous';
+        sendResponse({ token: auth.token, userId: auth.userId, displayName });
+      });
+    });
+    return true;
+  }
+  if (msg.type === 'oc-collab-create') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse({ error: 'Not signed in' });
+      const result = await createCollabPage(auth.token, auth.userId, msg.pageKey, msg.pageUrl, msg.pageTitle);
+      sendResponse(result);
+    })().catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-collab-join') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse({ error: 'Not signed in' });
+      const session = (await chrome.storage.local.get('ocSupabaseSession')).ocSupabaseSession;
+      const displayName = session?.user?.user_metadata?.display_name || session?.user?.email || 'Anonymous';
+      const result = await joinCollabPage(auth.token, auth.userId, msg.inviteCode, msg.displayName || displayName);
+      sendResponse(result);
+    })().catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-collab-push') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse({ error: 'Not signed in' });
+      const session = (await chrome.storage.local.get('ocSupabaseSession')).ocSupabaseSession;
+      const displayName = session?.user?.user_metadata?.display_name || session?.user?.email || 'Anonymous';
+      await pushAnnotation(auth.token, auth.userId, msg.collabPageId, msg.displayName || displayName, msg.highlight);
+      sendResponse({ ok: true });
+    })().catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-collab-pull') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse({ error: 'Not signed in' });
+      const annotations = await pullAnnotations(auth.token, msg.collabPageId);
+      sendResponse({ annotations });
+    })().catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-collab-delete') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse({ error: 'Not signed in' });
+      await deleteAnnotation(auth.token, msg.annotationId);
+      sendResponse({ ok: true });
+    })().catch(e => sendResponse({ error: e.message }));
+    return true;
+  }
+  if (msg.type === 'oc-collab-status') {
+    (async () => {
+      const auth = await getAuthContext();
+      if (!auth) return sendResponse(null);
+      const result = await getCollabForPage(auth.token, auth.userId, msg.pageKey);
+      sendResponse(result);
+    })().catch(e => sendResponse(null));
     return true;
   }
 });

@@ -447,3 +447,13 @@
   margin-top: 3px;
   padding-left: 2px;
 }
+
+/* Collaborative highlights (from other users) */
+.oc-collab-highlight {
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background-color 0.2s, filter 0.2s;
+}
+.oc-collab-highlight:hover {
+  filter: brightness(1.3);
+}
