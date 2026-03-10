@@ -376,6 +376,7 @@
     .stats-grid .stat-card:nth-child(3) { animation-delay: 120ms; }
     .stats-grid .stat-card:nth-child(4) { animation-delay: 180ms; }
   </style>
+  <link rel="stylesheet" href="search-modal.css">
 </head>
 <body>
   <nav class="page-nav">
@@ -384,6 +385,10 @@
     <a href="library.html">Library</a>
     <a href="graph.html">Knowledge Graph</a>
     <span class="nav-spacer"></span>
+    <button class="nav-search-btn" onclick="window.__searchModalToggle && window.__searchModalToggle()" title="Search (⌘K)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span class="nav-search-kbd">&#8984;K</span>
+    </button>
     <button id="nav-export-btn" class="nav-sync-btn" title="Export to Obsidian">Export</button>
     <button id="nav-sync-btn" class="nav-sync-btn" title="Sync Now (⌘⇧S)">Sync</button>
     <a href="options.html">Settings</a>
@@ -439,5 +444,7 @@
   <script src="lib/export.js"></script>
   <script src="dashboard.js"></script>
   <script src="nav-sync.js"></script>
+  <script src="lib/minisearch.min.js"></script>
+  <script src="search-modal.js"></script>
 </body>
 </html>
