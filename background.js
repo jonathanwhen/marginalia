@@ -12,6 +12,23 @@ const DAILY_ALARM = 'oc-daily-summary';
 const DEFAULT_FLUSH_INTERVAL = 60; // minutes
 const PAGES_PER_DAY_GOAL = 150;
 
+// ── Debounced sync — coalesces rapid changes into one sync after 30s ──
+let _syncTimer = null;
+function scheduleSyncSoon() {
+  if (_syncTimer) clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(async () => {
+    _syncTimer = null;
+    try {
+      await syncReadings();
+    } catch (e) {
+      console.error('scheduleSyncSoon: sync failed', e);
+      await chrome.storage.local.set({
+        ocLastSyncResult: { syncedAt: new Date().toISOString(), synced: false, error: e.message || 'Sync failed' }
+      });
+    }
+  }, 30000);
+}
+
 // ── Context menu setup ──────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -161,7 +178,7 @@ async function classifyUntaggedReadings() {
 // ── Message router ──────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'oc-upsert-reading') {
-    upsertReading(msg).then(result => sendResponse(result));
+    upsertReading(msg).then(result => { scheduleSyncSoon(); sendResponse(result); });
     return true;
   }
   if (msg.type === 'oc-get-reading') {
@@ -304,6 +321,7 @@ async function handleHighlightChanged({ pageKey, action, text, highlightId }, ta
   }
 
   await touchReading(pageKey);
+  scheduleSyncSoon();
 }
 
 // ── Log pages read on a specific date ────────────────────────────────
@@ -1044,6 +1062,11 @@ async function syncReadings() {
 
   const synced = allOk ? changedKeys.length : 0;
   const failed = allOk ? 0 : changedKeys.length;
+
+  await chrome.storage.local.set({
+    ocLastSyncResult: { syncedAt: new Date().toISOString(), synced: true, count: synced }
+  });
+
   return { synced, failed, githubOk, telegramOk };
 }
 
