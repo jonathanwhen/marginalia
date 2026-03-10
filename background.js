@@ -3,6 +3,7 @@ import { getAuthContext } from './lib/supabase.js';
 import { listRemotePdfs, uploadPdf, downloadPdf } from './lib/pdf-sync.js';
 import { getAllTranscriptsMeta, getTranscript, putTranscript } from './lib/db.js';
 import { createCollabPage, joinCollabPage, pushAnnotation, pullAnnotations, deleteAnnotation, getCollabForPage, subscribeToAnnotations } from './lib/collab.js';
+import { pushReadings, pullReadings, mergeReadings } from './lib/readings-sync.js';
 
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1115,8 +1116,6 @@ async function syncReadings() {
   try {
     const auth = await getAuthContext();
     if (auth) {
-      const { pushReadings, pullReadings, mergeReadings } = await import('./lib/readings-sync.js');
-
       // Pull remote readings & highlights
       const remote = await pullReadings(auth.token, auth.userId);
 
