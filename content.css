@@ -412,3 +412,38 @@
   padding: 12px 0;
   text-align: center;
 }
+
+/* ── KaTeX rendering in dark-themed UI ─────────────────────────── */
+/* Ensure rendered math is light-colored to contrast with dark backgrounds */
+#oc-note-bubble .katex,
+#oc-annotation-popup .katex,
+#oc-sidebar .katex {
+  color: #e0e0e0;
+  font-size: 1em;
+}
+#oc-note-bubble .oc-nb-latex .katex {
+  font-size: 0.95em;
+}
+#oc-sidebar .oc-sb-hl-latex .katex {
+  font-size: 0.9em;
+}
+/* Override KaTeX display-mode blocks to not overflow containers */
+#oc-note-bubble .katex-display,
+#oc-sidebar .katex-display {
+  margin: 4px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Hint text for math input */
+#oc-note-bubble .oc-nb-edit-hint {
+  font-size: 10px;
+  color: #444;
+  margin-top: 4px;
+}
+#oc-annotation-popup .oc-ann-hint {
+  font-size: 10px;
+  color: #444;
+  margin-top: 3px;
+  padding-left: 2px;
+}

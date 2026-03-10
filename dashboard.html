@@ -285,6 +285,10 @@
       color: var(--text-2); margin-top: 6px; padding-top: 6px;
       border-top: 1px solid var(--border); font-style: normal;
     }
+    .detail-hl-latex { margin: 4px 0; }
+    .detail-hl-latex .katex { color: var(--text); font-size: 0.95em; }
+    .detail-hl-comment .katex { color: var(--text-2); }
+    .katex-display { margin: 4px 0; overflow-x: auto; }
     .detail-hl-empty { color: var(--text-4); font-size: 11px; padding: 12px 0; }
     .detail-header {
       display: flex; justify-content: flex-end; margin-bottom: 16px;
@@ -376,6 +380,7 @@
     .stats-grid .stat-card:nth-child(3) { animation-delay: 120ms; }
     .stats-grid .stat-card:nth-child(4) { animation-delay: 180ms; }
   </style>
+  <link rel="stylesheet" href="lib/katex.min.css">
 </head>
 <body>
   <nav class="page-nav">
@@ -434,6 +439,7 @@
     <div id="table-wrap"></div>
   </div>
 
+  <script src="lib/katex.min.js"></script>
   <script src="dashboard.js"></script>
   <script src="nav-sync.js"></script>
 </body>

@@ -72,14 +72,10 @@
     .hl-comment { font-size: 13px; color: #999; margin-top: 8px; }
     .hl-meta { font-size: 11px; color: #555; margin-top: 6px; }
 
-    .hl-latex {
-      margin: 6px 0;
-    }
-    .hl-latex code {
-      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-      font-size: 12px; background: #1a1a1a; color: #6fcf97;
-      padding: 2px 6px; border-radius: 3px;
-    }
+    .hl-latex { margin: 6px 0; }
+    .hl-latex .katex { color: #e0e0e0; font-size: 0.95em; }
+    .hl-comment .katex { color: #bbb; }
+    .katex-display { margin: 6px 0; overflow-x: auto; }
 
     .empty-state {
       text-align: center; padding: 80px 20px; color: #555;
@@ -95,6 +91,7 @@
     .error-state h2 { font-size: 18px; color: #eb5757; margin-bottom: 8px; }
     .error-state p { font-size: 14px; color: #888; }
   </style>
+  <link rel="stylesheet" href="lib/katex.min.css">
 </head>
 <body>
   <nav class="page-nav">
@@ -108,6 +105,7 @@
     <div id="error" style="display:none;"></div>
   </div>
 
+  <script src="lib/katex.min.js"></script>
   <script type="module" src="shared.js"></script>
 </body>
 </html>
