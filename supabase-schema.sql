@@ -128,3 +128,35 @@ create policy "library_update" on storage.objects for update using (
 create policy "library_delete" on storage.objects for delete using (
   bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
 );
+
+-- 4. Readings sync (cross-device)
+create table if not exists synced_readings (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  page_key text not null,
+  data jsonb not null,
+  updated_at timestamptz default now() not null,
+  unique(user_id, page_key)
+);
+
+alter table synced_readings enable row level security;
+create policy "Users manage own readings" on synced_readings
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- 5. Highlights sync (cross-device)
+create table if not exists synced_highlights (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  page_key text not null,
+  highlights jsonb not null default '[]'::jsonb,
+  updated_at timestamptz default now() not null,
+  unique(user_id, page_key)
+);
+
+alter table synced_highlights enable row level security;
+create policy "Users manage own highlights" on synced_highlights
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Indexes for efficient queries
+create index if not exists idx_synced_readings_user on synced_readings(user_id);
+create index if not exists idx_synced_highlights_user on synced_highlights(user_id);
