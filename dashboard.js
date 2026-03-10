@@ -766,5 +766,27 @@ function formatDateFull(iso) {
   });
 }
 
+// ── Export button ─────────────────────────────────────────────────
+(function () {
+  var btn = document.getElementById('nav-export-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    if (btn.classList.contains('syncing')) return;
+    btn.classList.add('syncing');
+    btn.textContent = 'Exporting\u2026';
+    try {
+      var count = await window.__marginaliaExport.exportToObsidian();
+      btn.textContent = count + ' exported';
+      setTimeout(function () { btn.textContent = 'Export'; }, 2000);
+    } catch (err) {
+      console.error('Export failed:', err);
+      btn.textContent = 'Error';
+      setTimeout(function () { btn.textContent = 'Export'; }, 2000);
+    } finally {
+      btn.classList.remove('syncing');
+    }
+  });
+})();
+
 // ── Init ─────────────────────────────────────────────────────────
 loadReadings();
