@@ -137,6 +137,11 @@ contextBridge.exposeInMainWorld('__marginaliaLibrary', {
   searchTranscripts: (query) => ipcRenderer.invoke('library-search', query)
 });
 
+// ── Export API (Electron folder picker + file write) ─────────────────
+contextBridge.exposeInMainWorld('__marginaliaExport', {
+  exportToFolder: (files) => ipcRenderer.invoke('export-obsidian', { files })
+});
+
 // ── Remap to window.chrome in the main world ─────────────────────────
 // This runs before page scripts, overwriting the built-in chrome object.
 webFrame.executeJavaScript(`

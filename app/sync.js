@@ -286,6 +286,16 @@ async function syncReadings() {
     }
   }
 
+  // Phase 1.7: Supabase readings/highlights sync
+  try {
+    const auth = await getSupabaseAuth();
+    if (auth) {
+      await syncReadingsToSupabase(auth.token, auth.userId, readings);
+    }
+  } catch (e) {
+    console.error('Supabase readings sync failed:', e);
+  }
+
   // Telegram phase
   if (hasTelegram) {
     const changedEntries = changedKeys.map(k => ({
@@ -314,7 +324,18 @@ async function syncReadings() {
     .then(r => { if (r && (r.uploaded > 0 || r.downloaded > 0)) console.log(`PDF sync: ${r.uploaded} uploaded, ${r.downloaded} downloaded`); })
     .catch(e => console.error('Library PDF sync failed:', e));
 
-  return { synced: allOk ? changedKeys.length : 0, failed: allOk ? 0 : changedKeys.length, githubOk, telegramOk };
+  const pushed = allOk ? changedKeys.length : 0;
+
+  // Store sync result so UI can display last-sync status
+  storage.set('local', {
+    ocLastSyncResult: {
+      syncedAt: new Date().toISOString(),
+      synced: true,
+      count: pushed
+    }
+  });
+
+  return { synced: pushed, failed: allOk ? 0 : changedKeys.length, githubOk, telegramOk };
 }
 
 function buildDiffMessage(changedEntries) {
@@ -493,10 +514,125 @@ async function syncLibraryPdfs() {
   return { uploaded, downloaded };
 }
 
+// ── Debounced sync ───────────────────────────────────────────────────
+// Schedules a sync 30s after the last mutation, so rapid edits batch up.
+let _syncTimer = null;
+function scheduleSyncSoon() {
+  if (_syncTimer) clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(async () => {
+    _syncTimer = null;
+    try {
+      await syncReadings();
+    } catch (e) {
+      console.error('scheduleSyncSoon failed:', e);
+    }
+  }, 30000);
+}
+
+// ── Supabase readings/highlights sync ────────────────────────────────
+// Pushes local readings & highlights to Supabase, then pulls remote
+// changes. Uses last-write-wins by updatedAt/timestamp.
+
+async function syncReadingsToSupabase(token, userId, readings) {
+  const sbHeaders = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
+    'apikey': SUPABASE_ANON_KEY,
+    'Prefer': 'resolution=merge-duplicates'
+  };
+  const sbReadHeaders = {
+    'Authorization': `Bearer ${token}`,
+    'apikey': SUPABASE_ANON_KEY
+  };
+
+  // Push readings that have been updated
+  for (const [pageKey, reading] of Object.entries(readings)) {
+    if (!reading.updatedAt) continue;
+
+    await fetch(`${SUPABASE_URL}/rest/v1/synced_readings`, {
+      method: 'POST',
+      headers: sbHeaders,
+      body: JSON.stringify({
+        user_id: userId,
+        page_key: pageKey,
+        data: reading,
+        updated_at: reading.updatedAt
+      })
+    });
+
+    // Push highlights for this page
+    const hlData = storage.get('local', [pageKey]);
+    const highlights = hlData[pageKey];
+    if (Array.isArray(highlights) && highlights.length > 0) {
+      await fetch(`${SUPABASE_URL}/rest/v1/synced_highlights`, {
+        method: 'POST',
+        headers: sbHeaders,
+        body: JSON.stringify({
+          user_id: userId,
+          page_key: pageKey,
+          highlights: highlights,
+          updated_at: new Date().toISOString()
+        })
+      });
+    }
+  }
+
+  // Pull remote readings — merge by last-write-wins on updatedAt
+  const readRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/synced_readings?user_id=eq.${userId}`,
+    { headers: sbReadHeaders }
+  );
+  if (readRes.ok) {
+    const remote = await readRes.json();
+    for (const row of remote) {
+      const local = readings[row.page_key];
+      if (!local || (row.data.updatedAt && (!local.updatedAt || row.data.updatedAt > local.updatedAt))) {
+        readings[row.page_key] = row.data;
+      }
+    }
+    saveReadings(readings);
+  }
+
+  // Pull remote highlights — merge by ID with timestamp-based wins
+  const hlRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/synced_highlights?user_id=eq.${userId}`,
+    { headers: sbReadHeaders }
+  );
+  if (hlRes.ok) {
+    const remoteHl = await hlRes.json();
+    for (const row of remoteHl) {
+      const localHlData = storage.get('local', [row.page_key]);
+      const local = localHlData[row.page_key];
+      if (!local || !Array.isArray(local)) {
+        storage.set('local', { [row.page_key]: row.highlights });
+      } else {
+        const merged = mergeHighlightArrays(local, row.highlights);
+        storage.set('local', { [row.page_key]: merged });
+      }
+    }
+  }
+}
+
+function mergeHighlightArrays(localArr, remoteArr) {
+  const byId = new Map();
+  for (const h of localArr) byId.set(h.id, h);
+  for (const h of remoteArr) {
+    const existing = byId.get(h.id);
+    if (!existing || (h.timestamp && (!existing.timestamp || h.timestamp > existing.timestamp))) {
+      byId.set(h.id, h);
+    }
+  }
+  return [...byId.values()];
+}
+
 // ── Message router ───────────────────────────────────────────────────
 function handleMessage(msg) {
   switch (msg.type) {
-    case 'oc-upsert-reading': return upsertReading(msg);
+    case 'oc-upsert-reading': {
+      const result = upsertReading(msg);
+      scheduleSyncSoon();
+      return result;
+    }
     case 'oc-get-reading': {
       const readings = getReadings();
       return { reading: readings[msg.pageKey] || null };
@@ -531,6 +667,7 @@ function handleMessage(msg) {
         }
       }
       touchReading(msg.pageKey);
+      scheduleSyncSoon();
       return { ok: true };
     }
     case 'oc-log-pages': return logPages(msg.pageKey, msg.date, msg.pages);
