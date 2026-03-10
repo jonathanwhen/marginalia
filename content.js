@@ -520,6 +520,9 @@
   }
 
   // ── Toolbar (used outside highlight mode) ──────────────────────
+  // Sites where native selection UI conflicts with our toolbar above the selection
+  const showToolbarBelow = /^(claude\.ai|chatgpt\.com)$/.test(location.hostname.replace(/^www\./, ''));
+
   function showToolbar(x, y, text, range) {
     removeToolbar();
     pendingText = text;
@@ -536,8 +539,15 @@
     document.body.appendChild(toolbar);
 
     const vw = window.innerWidth;
+    const rect = range.getBoundingClientRect();
     let tx = x - toolbar.offsetWidth / 2;
-    let ty = y - 48;
+    let ty;
+    if (showToolbarBelow) {
+      // Position below the selection to avoid conflicting with site reply buttons
+      ty = rect.bottom + window.scrollY + 8;
+    } else {
+      ty = y - 48;
+    }
     tx = Math.max(8, Math.min(tx, vw - toolbar.offsetWidth - 8));
     ty = Math.max(8, ty);
     toolbar.style.left = tx + 'px';
