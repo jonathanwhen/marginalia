@@ -350,7 +350,7 @@ function renderGrid() {
 
     const card = `<div class="transcript-card${isPinned ? ' pinned' : ''}" data-key="${escAttr(t.pageKey)}">
       <div class="card-title">${escHtml(t.title || '(untitled)')}</div>
-      ${t.author ? `<div class="card-author">${escHtml(t.author)}</div>` : ''}
+      <div class="card-author">${escHtml(t.author || 'Add author...')}</div>
       <div class="card-meta">
         <span>${t.pageCount || 0} pages</span>
         <span>${(t.wordCount || 0).toLocaleString()} words</span>
@@ -375,7 +375,7 @@ function renderGrid() {
   // Wire card clicks → open reader
   grid.querySelectorAll('.transcript-card').forEach(card => {
     card.addEventListener('click', (e) => {
-      if (e.target.closest('.card-delete') || e.target.closest('.card-pin')) return;
+      if (e.target.closest('.card-delete') || e.target.closest('.card-pin') || e.target.closest('.editing')) return;
       const key = card.dataset.key;
       const readerUrl = chrome.runtime.getURL(`library-reader.html?key=${encodeURIComponent(key)}`);
       window.location.href = readerUrl;
@@ -415,6 +415,104 @@ function renderGrid() {
         return;
       }
       await deleteLibraryItem(btn.dataset.key);
+    });
+  });
+
+  // Wire title editing (double-click to rename)
+  grid.querySelectorAll('.card-title').forEach(titleEl => {
+    titleEl.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const card = titleEl.closest('.transcript-card');
+      const key = card.dataset.key;
+      const t = allTranscripts.find(x => x.pageKey === key);
+      if (!t) return;
+
+      titleEl.classList.add('editing');
+      titleEl.contentEditable = 'true';
+      titleEl.style.webkitLineClamp = 'unset';
+      titleEl.style.overflow = 'visible';
+      titleEl.focus();
+
+      // Select all text
+      const range = document.createRange();
+      range.selectNodeContents(titleEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      const commit = async () => {
+        titleEl.contentEditable = 'false';
+        titleEl.classList.remove('editing');
+        titleEl.style.webkitLineClamp = '';
+        titleEl.style.overflow = '';
+        const newTitle = titleEl.textContent.trim();
+        if (!newTitle || newTitle === t.title) {
+          titleEl.textContent = t.title || '(untitled)';
+          return;
+        }
+        t.title = newTitle;
+        await updateTranscriptField(key, 'title', newTitle);
+        // Also update the reading entry so dashboard + sync stay consistent
+        await chrome.runtime.sendMessage({
+          type: 'oc-upsert-reading', pageKey: key, title: newTitle
+        });
+      };
+
+      titleEl.addEventListener('blur', commit, { once: true });
+      titleEl.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') { ke.preventDefault(); titleEl.blur(); }
+        if (ke.key === 'Escape') {
+          titleEl.textContent = t.title || '(untitled)';
+          titleEl.blur();
+        }
+      });
+    });
+  });
+
+  // Wire author editing (double-click to rename)
+  grid.querySelectorAll('.card-author').forEach(authorEl => {
+    authorEl.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const card = authorEl.closest('.transcript-card');
+      const key = card.dataset.key;
+      const t = allTranscripts.find(x => x.pageKey === key);
+      if (!t) return;
+
+      authorEl.classList.add('editing');
+      authorEl.contentEditable = 'true';
+      if (!t.author) authorEl.textContent = '';
+      authorEl.focus();
+
+      const range = document.createRange();
+      range.selectNodeContents(authorEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      const commit = async () => {
+        authorEl.contentEditable = 'false';
+        authorEl.classList.remove('editing');
+        const newAuthor = authorEl.textContent.trim();
+        if (newAuthor === (t.author || '')) {
+          authorEl.textContent = t.author || 'Add author...';
+          return;
+        }
+        t.author = newAuthor;
+        authorEl.textContent = newAuthor || 'Add author...';
+        await updateTranscriptField(key, 'author', newAuthor);
+        await chrome.runtime.sendMessage({
+          type: 'oc-upsert-reading', pageKey: key, author: newAuthor
+        });
+      };
+
+      authorEl.addEventListener('blur', commit, { once: true });
+      authorEl.addEventListener('keydown', (ke) => {
+        if (ke.key === 'Enter') { ke.preventDefault(); authorEl.blur(); }
+        if (ke.key === 'Escape') {
+          authorEl.textContent = t.author || 'Add author...';
+          authorEl.blur();
+        }
+      });
     });
   });
 
