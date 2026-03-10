@@ -678,6 +678,16 @@
       saveHighlights(highlights, () => {
         ensureReadingExists();
         notifyHighlightChanged('create', text, h.id);
+        // Push to collab session if active
+        if (window.__collabState) {
+          try {
+            chrome.runtime.sendMessage({
+              type: 'oc-collab-push',
+              collabPageId: window.__collabState.collabPageId,
+              highlight: h
+            });
+          } catch (e) { console.warn('collab push failed:', e); }
+        }
         if (onDone) onDone(h, mark);
       });
     });
@@ -1037,16 +1047,187 @@
     });
   }
 
+  // ── Collaborative annotations ──────────────────────────────────────
+  // One color per collaborator, cycled. Visually distinct from the user's
+  // own warm-orange highlights and the blue shared-page overlays.
+  const COLLAB_COLORS = [
+    '#7c9ae8', // blue
+    '#e87ca8', // pink
+    '#7ce8b4', // green
+    '#c87ce8', // purple
+    '#e8c87c', // gold
+    '#7ce8e8', // cyan
+  ];
+
+  // Track rendered collab annotation IDs to diff against new polls
+  let renderedCollabIds = new Set();
+
+  async function initCollab() {
+    if (!isContextValid()) return;
+    try {
+      const auth = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'oc-get-auth' }, resolve);
+      });
+      if (!auth) return;
+
+      const collab = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'oc-collab-status', pageKey: pageKey() }, resolve);
+      });
+      if (!collab) return;
+
+      // Store collab state so saveHighlight can push
+      window.__collabState = {
+        collabPageId: collab.collabPageId,
+        userId: auth.userId,
+        displayName: auth.displayName
+      };
+
+      // Initial pull
+      const result = await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'oc-collab-pull', collabPageId: collab.collabPageId }, resolve);
+      });
+      if (result?.annotations) {
+        renderCollabAnnotations(result.annotations, auth.userId);
+      }
+
+      // Poll every 5s for updates
+      setInterval(async () => {
+        if (!isContextValid()) return;
+        try {
+          const r = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({ type: 'oc-collab-pull', collabPageId: collab.collabPageId }, resolve);
+          });
+          if (r?.annotations) renderCollabAnnotations(r.annotations, auth.userId);
+        } catch (e) { /* silent */ }
+      }, 5000);
+    } catch (e) {
+      console.warn('collab init failed:', e);
+    }
+  }
+
+  function renderCollabAnnotations(annotations, myUserId) {
+    // Filter out own annotations
+    const others = annotations.filter(a => a.userId !== myUserId);
+    const newIds = new Set(others.map(a => a.id));
+
+    // If nothing changed, skip re-render
+    if (newIds.size === renderedCollabIds.size && [...newIds].every(id => renderedCollabIds.has(id))) {
+      return;
+    }
+
+    // Remove old collab marks by unwrapping
+    const parentsToNormalize = new Set();
+    document.querySelectorAll('.oc-collab-highlight').forEach(mark => {
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parentsToNormalize.add(parent);
+    });
+    parentsToNormalize.forEach(p => p.normalize());
+
+    // Assign colors to collaborators (stable per userId)
+    const userIds = [...new Set(others.map(a => a.userId))];
+    const userColors = {};
+    userIds.forEach((id, i) => { userColors[id] = COLLAB_COLORS[i % COLLAB_COLORS.length]; });
+
+    // Render each collaborator's highlights
+    for (const ann of others) {
+      const h = ann.highlight;
+      const color = userColors[ann.userId];
+      const displayName = ann.displayName;
+      injectHighlight(h, (range, highlight) => {
+        wrapCollabRange(range, highlight, displayName, color);
+      });
+    }
+
+    renderedCollabIds = newIds;
+  }
+
+  function wrapCollabRange(range, h, displayName, color) {
+    try {
+      const mark = document.createElement('mark');
+      mark.className = 'oc-collab-highlight';
+      mark.style.backgroundColor = color + '33'; // 20% opacity
+      mark.style.borderBottom = '2px solid ' + color;
+      mark.title = displayName + ': ' + (h.comment || h.text?.slice(0, 50) || '');
+      mark.dataset.collab = 'true';
+      mark.dataset.userName = displayName;
+      range.surroundContents(mark);
+      mark.addEventListener('click', e => {
+        e.stopPropagation();
+        showCollabNoteBubble(mark, h, displayName, color);
+      });
+    } catch (e) {
+      // surroundContents can fail on cross-element ranges; wrap individual text nodes
+      wrapCollabRangeMulti(range, h, displayName, color);
+    }
+  }
+
+  function wrapCollabRangeMulti(range, h, displayName, color) {
+    const textNodes = [];
+    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node)) textNodes.push(node);
+    }
+    for (const tNode of textNodes) {
+      let start = 0, end = tNode.nodeValue.length;
+      if (tNode === range.startContainer) start = range.startOffset;
+      if (tNode === range.endContainer) end = range.endOffset;
+      if (start >= end) continue;
+
+      if (end < tNode.nodeValue.length) tNode.splitText(end);
+      const target = start > 0 ? tNode.splitText(start) : tNode;
+
+      const mark = document.createElement('mark');
+      mark.className = 'oc-collab-highlight';
+      mark.style.backgroundColor = color + '33';
+      mark.style.borderBottom = '2px solid ' + color;
+      mark.title = displayName + ': ' + (h.comment || h.text?.slice(0, 50) || '');
+      mark.dataset.collab = 'true';
+      mark.dataset.userName = displayName;
+      target.parentNode.insertBefore(mark, target);
+      mark.appendChild(target);
+      mark.addEventListener('click', e => {
+        e.stopPropagation();
+        showCollabNoteBubble(mark, h, displayName, color);
+      });
+    }
+  }
+
+  function showCollabNoteBubble(anchor, h, displayName, color) {
+    removeNoteBubble();
+    noteBubble = document.createElement('div');
+    noteBubble.id = 'oc-note-bubble';
+    noteBubble.innerHTML = `
+      <div class="oc-nb-quote">${escHtml(h.text?.length > 120 ? h.text.slice(0, 120) + '\u2026' : (h.text || ''))}</div>
+      ${h.comment ? `<div class="oc-nb-comment">${escHtml(h.comment)}</div>` : ''}
+      <div style="margin-top:6px; padding-top:6px; border-top:1px solid #222; font-size:10px; color:${color};">
+        ${escHtml(displayName)} \u2014 collaborative highlight
+      </div>
+    `;
+    document.body.appendChild(noteBubble);
+
+    const rect = anchor.getBoundingClientRect();
+    let nx = rect.left + window.scrollX;
+    let ny = rect.bottom + window.scrollY + 8;
+    nx = Math.max(8, Math.min(nx, window.innerWidth - 270));
+    noteBubble.style.left = nx + 'px';
+    noteBubble.style.top = ny + 'px';
+  }
+
   // Apply on load
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       applyStoredHighlights();
       const shareCode = getShareCodeFromHash();
       if (shareCode) loadSharedHighlights(shareCode);
+      initCollab();
     });
   } else {
     applyStoredHighlights();
     const shareCode = getShareCodeFromHash();
     if (shareCode) loadSharedHighlights(shareCode);
+    initCollab();
   }
 })();

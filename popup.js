@@ -463,6 +463,106 @@ function escHtml(str) {
   return div.innerHTML;
 }
 
+// ── Collaborative annotations UI ──────────────────────────────────
+document.getElementById('collab-btn')?.addEventListener('click', () => {
+  const panel = document.getElementById('collab-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'block') checkCollabStatus();
+});
+
+async function checkCollabStatus() {
+  if (!currentPageKey) return;
+  const statusEl = document.getElementById('collab-status');
+  const joinSection = document.getElementById('collab-join-section');
+  const activeSection = document.getElementById('collab-active-section');
+
+  statusEl.textContent = 'Checking...';
+
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'oc-collab-status', pageKey: currentPageKey });
+    if (result && result.collabPageId) {
+      // Collab is active for this page
+      statusEl.textContent = result.isOwner ? 'You created this collab.' : 'You joined this collab.';
+      joinSection.style.display = 'none';
+      activeSection.style.display = 'block';
+      document.getElementById('collab-invite-display').textContent = 'Invite code: ' + result.inviteCode;
+
+      document.getElementById('collab-copy-btn').onclick = async () => {
+        await navigator.clipboard.writeText(result.inviteCode);
+        showToast('Invite code copied!');
+      };
+    } else {
+      statusEl.textContent = 'No collaboration on this page yet.';
+      joinSection.style.display = 'block';
+      activeSection.style.display = 'none';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Sign in to collaborate.';
+    joinSection.style.display = 'none';
+    activeSection.style.display = 'none';
+  }
+}
+
+document.getElementById('collab-create-btn')?.addEventListener('click', async () => {
+  if (!currentPageKey) { showToast('No page context', 'error'); return; }
+  const btn = document.getElementById('collab-create-btn');
+  btn.textContent = 'Creating...';
+  btn.disabled = true;
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const result = await chrome.runtime.sendMessage({
+      type: 'oc-collab-create',
+      pageKey: currentPageKey,
+      pageUrl: tab?.url || '',
+      pageTitle: tab?.title || currentPageKey
+    });
+
+    if (result?.error) {
+      showToast(result.error, 'error');
+    } else if (result?.inviteCode) {
+      await navigator.clipboard.writeText(result.inviteCode);
+      showToast('Collab created! Invite code copied.');
+      checkCollabStatus();
+    }
+  } catch (e) {
+    showToast(e.message || 'Failed to create collab', 'error');
+  }
+
+  btn.textContent = 'Create Collab';
+  btn.disabled = false;
+});
+
+document.getElementById('collab-join-btn')?.addEventListener('click', async () => {
+  const input = document.getElementById('collab-invite-input');
+  const code = input.value.trim();
+  if (!code) { showToast('Enter an invite code', 'error'); return; }
+
+  const btn = document.getElementById('collab-join-btn');
+  btn.textContent = 'Joining...';
+  btn.disabled = true;
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'oc-collab-join',
+      inviteCode: code
+    });
+
+    if (result?.error) {
+      showToast(result.error, 'error');
+    } else if (result?.collabPageId) {
+      showToast('Joined! Highlights will sync.');
+      input.value = '';
+      checkCollabStatus();
+    }
+  } catch (e) {
+    showToast(e.message || 'Failed to join', 'error');
+  }
+
+  btn.textContent = 'Join';
+  btn.disabled = false;
+});
+
 // ── Init ──────────────────────────────────────────────────────────
 autofill().catch(() => {});
 updatePendingCount();

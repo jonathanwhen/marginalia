@@ -163,6 +163,22 @@
   <div class="panel" id="panel-highlights">
     <button class="send-btn" id="hl-mode-btn" style="margin-bottom:10px;">Start Highlighting</button>
     <button class="send-btn" id="hl-share-btn" style="margin-bottom:10px; background:none; border:1px solid #e8a87c; color:#e8a87c;">Share Annotations</button>
+    <button class="send-btn" id="collab-btn" style="margin-bottom:10px; background:none; border:1px solid #7c9ae8; color:#7c9ae8;">Collaborate</button>
+    <div id="collab-panel" style="display:none; margin-bottom:10px; padding:10px; background:#111; border:1px solid #252525; border-radius:6px;">
+      <div id="collab-status" style="font-size:11px; color:#888; margin-bottom:8px;"></div>
+      <div id="collab-join-section">
+        <input id="collab-invite-input" placeholder="Paste invite code..." style="width:100%; background:#141414; border:1px solid #252525; border-radius:5px; color:#e0e0e0; font-size:11px; padding:6px 8px; outline:none; margin-bottom:6px; box-sizing:border-box;" />
+        <div style="display:flex; gap:6px;">
+          <button id="collab-join-btn" class="send-btn" style="flex:1; margin:0; background:none; border:1px solid #7c9ae8; color:#7c9ae8; font-size:11px; padding:6px;">Join</button>
+          <button id="collab-create-btn" class="send-btn" style="flex:1; margin:0; background:#7c9ae8; color:#0a0a0a; font-size:11px; padding:6px;">Create Collab</button>
+        </div>
+      </div>
+      <div id="collab-active-section" style="display:none;">
+        <div style="font-size:11px; color:#7c9ae8; margin-bottom:6px;">Collaboration active</div>
+        <div id="collab-invite-display" style="font-size:10px; color:#666; word-break:break-all;"></div>
+        <button id="collab-copy-btn" class="send-btn" style="margin-top:6px; background:none; border:1px solid #7c9ae8; color:#7c9ae8; font-size:10px; padding:5px;">Copy Invite Code</button>
+      </div>
+    </div>
     <button class="send-btn" id="hl-open-reader" style="margin-bottom:10px; display:none; background:#6fcf97;">Open in PDF Reader</button>
     <div class="hl-list" id="hl-list">
       <div class="hl-empty">No highlights on this page yet.<br>Select text to highlight.</div>

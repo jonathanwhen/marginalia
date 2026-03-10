@@ -128,3 +128,81 @@ create policy "library_update" on storage.objects for update using (
 create policy "library_delete" on storage.objects for delete using (
   bucket_id = 'library' and auth.uid()::text = split_part(name, '/', 1)
 );
+
+-- 4. Collaborative annotation pages
+create table if not exists collab_pages (
+  id uuid default gen_random_uuid() primary key,
+  owner_id uuid references auth.users(id) on delete cascade not null,
+  page_key text not null,
+  page_url text,
+  page_title text,
+  invite_code text unique not null default encode(gen_random_bytes(6), 'hex'),
+  created_at timestamptz default now() not null
+);
+
+alter table collab_pages enable row level security;
+create policy "Owners manage collab pages" on collab_pages
+  for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "Members can read collab pages" on collab_pages
+  for select using (
+    id in (select collab_page_id from collab_members where user_id = auth.uid())
+  );
+-- Allow authenticated users to look up collab pages by invite_code (needed for joining)
+create policy "Authenticated users can lookup by invite code" on collab_pages
+  for select using (auth.role() = 'authenticated');
+
+-- Collab page members
+create table if not exists collab_members (
+  id uuid default gen_random_uuid() primary key,
+  collab_page_id uuid references collab_pages(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  display_name text,
+  joined_at timestamptz default now() not null,
+  unique(collab_page_id, user_id)
+);
+
+alter table collab_members enable row level security;
+create policy "Members can read members" on collab_members
+  for select using (
+    collab_page_id in (
+      select id from collab_pages where owner_id = auth.uid()
+      union
+      select collab_page_id from collab_members where user_id = auth.uid()
+    )
+  );
+create policy "Users can join" on collab_members
+  for insert with check (auth.uid() = user_id);
+
+-- Collaborative annotations
+create table if not exists collab_annotations (
+  id uuid default gen_random_uuid() primary key,
+  collab_page_id uuid references collab_pages(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  display_name text,
+  highlight jsonb not null,
+  created_at timestamptz default now() not null,
+  updated_at timestamptz default now() not null
+);
+
+alter table collab_annotations enable row level security;
+create policy "Members can read annotations" on collab_annotations
+  for select using (
+    collab_page_id in (
+      select id from collab_pages where owner_id = auth.uid()
+      union
+      select collab_page_id from collab_members where user_id = auth.uid()
+    )
+  );
+create policy "Users manage own annotations" on collab_annotations
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Indexes for collab tables
+create index idx_collab_pages_owner on collab_pages (owner_id);
+create index idx_collab_pages_invite on collab_pages (invite_code);
+create index idx_collab_pages_page_key on collab_pages (page_key);
+create index idx_collab_members_page on collab_members (collab_page_id);
+create index idx_collab_members_user on collab_members (user_id);
+create index idx_collab_annotations_page on collab_annotations (collab_page_id);
+
+-- Enable realtime for collab annotations
+alter publication supabase_realtime add table collab_annotations;
