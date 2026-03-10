@@ -8,6 +8,7 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const fsp = require('fs').promises;
 const storage = require('./storage');
 const sync = require('./sync');
 const libraryStorage = require('./library-storage');
@@ -160,6 +161,27 @@ ipcMain.on('runtime-get-url', (event, relativePath) => {
 
 ipcMain.handle('runtime-send-message', async (_event, msg) => {
   return sync.handleMessage(msg);
+});
+
+// ── IPC: Export (Obsidian-compatible folder export) ──────────────────
+
+ipcMain.handle('export-obsidian', async (_event, zipData) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose export folder'
+  });
+  if (result.canceled) return { canceled: true };
+
+  const exportDir = result.filePaths[0];
+
+  // zipData.files is { relativePath: fileContent } — write each file to disk
+  for (const [filePath, content] of Object.entries(zipData.files)) {
+    const fullPath = path.join(exportDir, filePath);
+    await fsp.mkdir(path.dirname(fullPath), { recursive: true });
+    await fsp.writeFile(fullPath, content, 'utf8');
+  }
+
+  return { success: true, path: exportDir };
 });
 
 // ── IPC: Navigation ─────────────────────────────────────────────────
