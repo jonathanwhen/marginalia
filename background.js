@@ -97,6 +97,18 @@ async function saveReadings(readings) {
   await chrome.storage.local.set({ ocReadings: readings });
 }
 
+// Extract highlight arrays from a chrome.storage dump, skipping known non-highlight keys
+function extractHighlights(allStorage) {
+  const skip = new Set(['ocReadings', 'ocGitHubSha', 'ocMarkdownShas', 'ocSupabaseSession', 'ocLastSyncResult']);
+  const highlights = {};
+  for (const [key, val] of Object.entries(allStorage)) {
+    if (!skip.has(key) && !key.startsWith('pos:') && Array.isArray(val)) {
+      highlights[key] = val;
+    }
+  }
+  return highlights;
+}
+
 // Sync status is derived: reading needs sync when syncedAt is null or < updatedAt
 function needsSync(reading) {
   return !reading.syncedAt || reading.syncedAt < reading.updatedAt;
@@ -1023,6 +1035,42 @@ async function syncReadings() {
   const { autoExtract } = await chrome.storage.sync.get('autoExtract');
   if (autoExtract && changedKeys.length > 0) {
     extractConceptsBatch(changedKeys).catch(e => console.error('Auto-extract failed:', e));
+  }
+
+  // Phase 1.8: Supabase readings/highlights sync (cross-device)
+  try {
+    const auth = await getAuthContext();
+    if (auth) {
+      const { pushReadings, pullReadings, mergeReadings } = await import('./lib/readings-sync.js');
+
+      // Pull remote readings & highlights
+      const remote = await pullReadings(auth.token, auth.userId);
+
+      // Merge with local
+      const allStorage = await chrome.storage.local.get(null);
+      const merged = await mergeReadings(
+        { readings, highlights: extractHighlights(allStorage) },
+        remote
+      );
+
+      if (merged.changed) {
+        // Apply merged readings
+        Object.assign(readings, merged.readings);
+        await saveReadings(readings);
+
+        // Apply merged highlights
+        for (const [key, hl] of Object.entries(merged.highlights)) {
+          await chrome.storage.local.set({ [key]: hl });
+        }
+      }
+
+      // Push local to remote (re-read storage after potential merge)
+      const freshStorage = merged.changed ? await chrome.storage.local.get(null) : allStorage;
+      await pushReadings(auth.token, auth.userId, readings, freshStorage);
+    }
+  } catch (e) {
+    console.error('Supabase readings sync failed:', e);
+    // Non-fatal: continue with rest of sync
   }
 
   // Phase 2: Telegram — send diff message for changed readings only
