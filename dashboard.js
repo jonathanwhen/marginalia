@@ -5,6 +5,27 @@ function esc(str) {
   return div.innerHTML;
 }
 
+// ── Markdown + math rendering ───────────────────────────────────
+function renderMarkdownWithMath(text) {
+  if (!text) return '';
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return esc(text);
+
+  let html = marked.parse(text);
+  html = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+
+  if (typeof katex !== 'undefined') {
+    html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex) => {
+      try { return katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false }); }
+      catch { return `<code>${esc(tex)}</code>`; }
+    });
+    html = html.replace(/(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)\$/g, (_m, tex) => {
+      try { return katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false }); }
+      catch { return `<code>${esc(tex)}</code>`; }
+    });
+  }
+  return html;
+}
+
 // ── LaTeX rendering helpers ─────────────────────────────────────
 // Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
 function renderLatex(tex) {
@@ -594,7 +615,8 @@ async function toggleDetail(tr, detailTr, reading) {
     metaHtml += `<div class="meta-row"><span class="meta-label">Updated</span><span class="meta-value">${esc(formatDateFull(reading.updatedAt))}</span></div>`;
   }
   metaHtml += '</div>';
-  if (reading.notes) metaHtml += `<div class="detail-notes">${esc(reading.notes)}</div>`;
+  if (reading.conversationUrl) metaHtml += `<a class="detail-conv-link" href="${esc(reading.conversationUrl)}" target="_blank" rel="noopener">💬 Claude conversation</a>`;
+  if (reading.notes) metaHtml += `<div class="detail-notes">${renderMarkdownWithMath(reading.notes)}</div>`;
   metaHtml += '</div>';
 
   // Right column: highlights

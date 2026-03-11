@@ -60,6 +60,56 @@
     return katexLoadPromise;
   }
 
+  // ── Markdown + DOMPurify loading for sidebar preview ──────────────
+  let markdownLibsLoaded = false;
+  let markdownLibsPromise = null;
+
+  function ensureMarkdownLibs() {
+    if (markdownLibsLoaded) return Promise.resolve();
+    if (markdownLibsPromise) return markdownLibsPromise;
+    markdownLibsPromise = ensureKatex().then(() => new Promise((resolve) => {
+      try {
+        let remaining = 0;
+        const done = () => { remaining--; if (remaining <= 0) { markdownLibsLoaded = true; resolve(); } };
+
+        if (typeof marked === 'undefined') {
+          remaining++;
+          const s = document.createElement('script');
+          s.src = chrome.runtime.getURL('lib/marked.min.js');
+          s.onload = done; s.onerror = done;
+          document.head.appendChild(s);
+        }
+        if (typeof DOMPurify === 'undefined') {
+          remaining++;
+          const s = document.createElement('script');
+          s.src = chrome.runtime.getURL('lib/dompurify.min.js');
+          s.onload = done; s.onerror = done;
+          document.head.appendChild(s);
+        }
+        if (remaining === 0) { markdownLibsLoaded = true; resolve(); }
+      } catch { resolve(); }
+    }));
+    return markdownLibsPromise;
+  }
+
+  function renderSidebarMarkdown(text) {
+    if (!text) return '';
+    if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') return escHtml(text);
+    let html = marked.parse(text);
+    html = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+    if (typeof katex !== 'undefined') {
+      html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex) => {
+        try { return katex.renderToString(tex.trim(), { displayMode: true, throwOnError: false }); }
+        catch { return `<code>${escHtml(tex)}</code>`; }
+      });
+      html = html.replace(/(?<!\$)\$(?!\$)((?:[^$\\]|\\.)+?)\$/g, (_m, tex) => {
+        try { return katex.renderToString(tex.trim(), { displayMode: false, throwOnError: false }); }
+        catch { return `<code>${escHtml(tex)}</code>`; }
+      });
+    }
+    return html;
+  }
+
   // Render a raw LaTeX string (from h.latex) as formatted HTML via KaTeX.
   function renderLatex(tex) {
     if (!tex || typeof katex === 'undefined') return `<code>${escHtml(tex)}</code>`;
@@ -871,8 +921,15 @@
         <button class="oc-sb-close" title="Close (Esc)">✕</button>
       </div>
       <div class="oc-sb-body">
-        <span class="oc-sb-label">Notes</span>
-        <textarea class="oc-sb-textarea" placeholder="Key takeaways, thoughts, or insights..."></textarea>
+        <div class="oc-sb-conv-row">
+          <input class="oc-sb-conv-input" type="url" placeholder="Claude conversation URL..." />
+        </div>
+        <div class="oc-sb-notes-header">
+          <span class="oc-sb-label">Notes</span>
+          <button class="oc-sb-preview-toggle" title="Toggle preview">Preview</button>
+        </div>
+        <textarea class="oc-sb-textarea" placeholder="Key takeaways, thoughts, or insights... (Markdown supported)"></textarea>
+        <div class="oc-sb-preview" style="display:none;"></div>
         <div class="oc-sb-status"></div>
         <div class="oc-sb-divider"></div>
         <div class="oc-sb-hl-header">Highlights (0)</div>
@@ -887,13 +944,20 @@
 
     const textarea = sidebar.querySelector('.oc-sb-textarea');
     const statusEl = sidebar.querySelector('.oc-sb-status');
+    const convInput = sidebar.querySelector('.oc-sb-conv-input');
+    const previewEl = sidebar.querySelector('.oc-sb-preview');
+    const previewBtn = sidebar.querySelector('.oc-sb-preview-toggle');
+    let previewMode = false;
 
-    // Load existing notes from reading
+    // Load existing notes + conversation URL from reading
     if (isContextValid()) {
       try {
         chrome.runtime.sendMessage({ type: 'oc-get-reading', pageKey: pageKey() }, response => {
           if (response?.reading?.notes) {
             textarea.value = response.reading.notes;
+          }
+          if (response?.reading?.conversationUrl) {
+            convInput.value = response.reading.conversationUrl;
           }
         });
       } catch (e) {}
@@ -902,12 +966,35 @@
     // Load highlights list
     loadSidebarHighlights();
 
+    // Preview toggle
+    previewBtn.addEventListener('click', () => {
+      previewMode = !previewMode;
+      if (previewMode) {
+        previewBtn.textContent = 'Edit';
+        textarea.style.display = 'none';
+        previewEl.style.display = 'block';
+        ensureMarkdownLibs().then(() => {
+          previewEl.innerHTML = renderSidebarMarkdown(textarea.value);
+        });
+      } else {
+        previewBtn.textContent = 'Preview';
+        textarea.style.display = '';
+        previewEl.style.display = 'none';
+        textarea.focus();
+      }
+    });
+
     // Auto-save on typing (debounced 1s)
     textarea.addEventListener('input', () => {
       statusEl.textContent = '';
       statusEl.className = 'oc-sb-status';
       clearTimeout(sidebarSaveTimer);
-      sidebarSaveTimer = setTimeout(() => saveSidebarNote(textarea, statusEl), 1000);
+      sidebarSaveTimer = setTimeout(() => saveSidebarNote(textarea, statusEl, convInput), 1000);
+    });
+
+    // Save conversation URL on change
+    convInput.addEventListener('change', () => {
+      saveSidebarNote(textarea, statusEl, convInput);
     });
 
     // Cmd/Ctrl+S for immediate save
@@ -915,9 +1002,8 @@
       if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         clearTimeout(sidebarSaveTimer);
-        saveSidebarNote(textarea, statusEl);
+        saveSidebarNote(textarea, statusEl, convInput);
       }
-      // Prevent Escape from propagating if handled by sidebar close
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -939,15 +1025,17 @@
       clearTimeout(sidebarSaveTimer);
       const textarea = sidebar.querySelector('.oc-sb-textarea');
       const statusEl = sidebar.querySelector('.oc-sb-status');
-      if (textarea && statusEl) saveSidebarNote(textarea, statusEl);
+      const convInput = sidebar.querySelector('.oc-sb-conv-input');
+      if (textarea && statusEl) saveSidebarNote(textarea, statusEl, convInput);
     }
     sidebar.remove();
     sidebar = null;
     document.documentElement.style.marginRight = '';
   }
 
-  function saveSidebarNote(textarea, statusEl) {
+  function saveSidebarNote(textarea, statusEl, convInput) {
     const notes = textarea.value.trim();
+    const conversationUrl = convInput?.value?.trim() || null;
     if (!isContextValid()) return;
     try {
       chrome.runtime.sendMessage({
@@ -955,7 +1043,8 @@
         pageKey: pageKey(),
         title: document.title || pageKey(),
         url: location.href,
-        notes
+        notes,
+        conversationUrl
       }, result => {
         if (result?.ok) {
           statusEl.textContent = 'Saved';

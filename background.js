@@ -343,7 +343,7 @@ async function estimatePages(tabId) {
 }
 
 // ── Upsert a reading entry ──────────────────────────────────────────
-async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content }) {
+async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content, conversationUrl }) {
   const readings = await getReadings();
   const now = new Date().toISOString();
   const existing = readings[pageKey];
@@ -364,6 +364,7 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
     estPages: estPages ?? existing?.estPages ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    conversationUrl: conversationUrl ?? existing?.conversationUrl ?? null,
     syncedAt: existing?.syncedAt ?? null,
     ...(existing?.readingLog ? { readingLog: existing.readingLog } : {})
   };
@@ -515,6 +516,7 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
         title: remote.title || '', author: remote.author || '',
         url: remote.url || pageKey, tags: remote.tags || [],
         notes: remote.notes || '', estPages: remote.estPages || 0,
+        conversationUrl: remote.conversationUrl || null,
         createdAt: remote.createdAt || now, updatedAt: remote.updatedAt || now,
         syncedAt: remote.updatedAt || now,
         ...(remote.readingLog ? { readingLog: remote.readingLog } : {})
@@ -529,6 +531,7 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
         tags: remote.tags || local.tags,
         notes: remote.notes || local.notes,
         estPages: remote.estPages || local.estPages,
+        conversationUrl: remote.conversationUrl || local.conversationUrl || null,
         createdAt: remote.createdAt || local.createdAt,
         updatedAt: remote.updatedAt,
         syncedAt: remote.updatedAt,
@@ -804,6 +807,7 @@ function buildMarkdownContent(pageKey, reading, highlights) {
   if (reading.author) lines.push(`author: "${reading.author.replace(/"/g, '\\"')}"`);
   if (reading.tags?.length) lines.push(`tags: [${reading.tags.map(t => `"${t}"`).join(', ')}]`);
   if (reading.url) lines.push(`url: "${reading.url}"`);
+  if (reading.conversationUrl) lines.push(`conversation: "${reading.conversationUrl}"`);
   if (reading.estPages) lines.push(`pages: ${reading.estPages}`);
   lines.push(`created: "${reading.createdAt || ''}"`);
   lines.push(`updated: "${reading.updatedAt || ''}"`);
@@ -1117,6 +1121,7 @@ async function syncReadings() {
         createdAt: reading.createdAt,
         updatedAt: reading.updatedAt,
         highlights: allHighlights[key] || [],
+        ...(reading.conversationUrl ? { conversationUrl: reading.conversationUrl } : {}),
         ...(reading.readingLog ? { readingLog: reading.readingLog } : {})
       };
     }

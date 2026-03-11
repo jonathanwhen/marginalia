@@ -269,9 +269,32 @@
     .detail-meta a:hover { text-decoration: underline; }
     .detail-notes {
       font-size: 12px; color: var(--text-2); line-height: 1.7;
-      white-space: pre-wrap; margin-top: 16px; padding: 14px;
+      margin-top: 16px; padding: 14px;
       background: var(--bg); border-radius: 6px; border: 1px solid var(--border);
     }
+    .detail-notes h1 { font-size: 16px; color: var(--text); margin: 12px 0 8px; font-weight: 600; }
+    .detail-notes h1:first-child { margin-top: 0; }
+    .detail-notes h2 { font-size: 13px; color: var(--text); margin: 10px 0 6px; font-weight: 600; }
+    .detail-notes h3 { font-size: 12px; color: var(--text); margin: 8px 0 4px; font-weight: 600; }
+    .detail-notes p { margin: 6px 0; }
+    .detail-notes ul, .detail-notes ol { margin: 6px 0; padding-left: 20px; }
+    .detail-notes li { margin: 3px 0; }
+    .detail-notes strong { color: var(--text); }
+    .detail-notes em { font-style: italic; }
+    .detail-notes code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+    .detail-notes pre { background: var(--surface-2); padding: 10px; border-radius: 4px; overflow-x: auto; margin: 8px 0; }
+    .detail-notes pre code { background: none; padding: 0; }
+    .detail-notes blockquote { border-left: 2px solid var(--accent); padding-left: 10px; color: var(--text-3); margin: 8px 0; }
+    .detail-notes a { color: var(--accent); text-decoration: none; }
+    .detail-notes a:hover { text-decoration: underline; }
+    .detail-notes hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+    .detail-conv-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--accent); font-size: 12px; text-decoration: none;
+      margin-top: 10px; padding: 6px 10px;
+      background: var(--accent-dim); border-radius: 5px;
+    }
+    .detail-conv-link:hover { text-decoration: underline; }
     .detail-hl-list {
       list-style: none; max-height: 400px; overflow-y: auto;
       display: flex; flex-direction: column; gap: 8px;
@@ -448,6 +471,8 @@
   <script src="lib/jszip.min.js"></script>
   <script src="lib/export.js"></script>
   <script src="lib/katex.min.js"></script>
+  <script src="lib/marked.min.js"></script>
+  <script src="lib/dompurify.min.js"></script>
   <script src="dashboard.js"></script>
   <script src="nav-sync.js"></script>
   <script src="lib/minisearch.min.js"></script>
