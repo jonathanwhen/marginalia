@@ -14,19 +14,17 @@ const DAILY_ALARM = 'oc-daily-summary';
 const DEFAULT_FLUSH_INTERVAL = 60; // minutes
 const PAGES_PER_DAY_GOAL = 150;
 
-// ── Debounced sync — coalesces rapid changes into one sync after 30s ──
+// ── Debounced local sync — Supabase only, no GitHub commits ──────────
+// GitHub/Telegram sync only runs on the periodic alarm or manual flush.
 let _syncTimer = null;
 function scheduleSyncSoon() {
   if (_syncTimer) clearTimeout(_syncTimer);
   _syncTimer = setTimeout(async () => {
     _syncTimer = null;
     try {
-      await syncReadings();
+      await syncLocal();
     } catch (e) {
-      console.error('scheduleSyncSoon: sync failed', e);
-      await chrome.storage.local.set({
-        ocLastSyncResult: { syncedAt: new Date().toISOString(), synced: false, error: e.message || 'Sync failed' }
-      });
+      console.error('scheduleSyncSoon: local sync failed', e);
     }
   }, 30000);
 }
@@ -1004,8 +1002,57 @@ async function syncLibraryPdfs() {
   return { uploaded, downloaded };
 }
 
-// ── syncReadings() — replaces flushOutbox() ─────────────────────────
+// ── syncLocal() — lightweight sync to Supabase only (no GitHub commits) ──
+async function syncLocal() {
+  const readings = await getReadings();
+  const allKeys = Object.keys(readings);
+  const changedKeys = allKeys.filter(k => needsSync(readings[k]));
+
+  // Auto-extract concepts if enabled
+  const { autoExtract } = await chrome.storage.sync.get('autoExtract');
+  if (autoExtract && changedKeys.length > 0) {
+    extractConceptsBatch(changedKeys).catch(e => console.error('Auto-extract failed:', e));
+  }
+
+  // Supabase readings/highlights sync (cross-device)
+  try {
+    const auth = await getAuthContext();
+    if (auth) {
+      const allStorage = await chrome.storage.local.get(null);
+      const remote = await pullReadings(auth.token, auth.userId);
+      const merged = await mergeReadings(
+        { readings, highlights: extractHighlights(allStorage) },
+        remote
+      );
+
+      if (merged.changed) {
+        Object.assign(readings, merged.readings);
+        await saveReadings(readings);
+        for (const [key, hl] of Object.entries(merged.highlights)) {
+          await chrome.storage.local.set({ [key]: hl });
+        }
+      }
+
+      const freshStorage = merged.changed ? await chrome.storage.local.get(null) : allStorage;
+      await pushReadings(auth.token, auth.userId, readings, freshStorage);
+    }
+  } catch (e) {
+    console.error('Supabase readings sync failed:', e);
+  }
+
+  // Sync library PDFs via Supabase Storage
+  syncLibraryPdfs()
+    .then(r => { if (r && (r.uploaded > 0 || r.downloaded > 0)) console.log(`PDF sync: ${r.uploaded} uploaded, ${r.downloaded} downloaded`); })
+    .catch(e => console.error('Library PDF sync failed:', e));
+}
+
+// ── syncReadings() — full sync including GitHub + Telegram ───────────
+// Only called by the periodic alarm (hourly) and manual oc-flush.
+// For frequent changes (highlights, annotations), use syncLocal() instead.
 async function syncReadings() {
+  // Run Supabase sync first
+  await syncLocal();
+
   const { botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir } =
     await chrome.storage.sync.get(['botToken', 'chatId', 'ghToken', 'ghOwner', 'ghRepo', 'ghPath', 'ghNotesDir']);
 
@@ -1020,7 +1067,7 @@ async function syncReadings() {
   let githubOk = true;
   let telegramOk = true;
 
-  // Phase 0: Pull from GitHub and merge remote changes into local
+  // Pull from GitHub and merge remote changes into local
   if (hasGitHub) {
     try {
       const mergeResult = await mergeFromRemote(ghToken, ghOwner, ghRepo, syncPath);
@@ -1029,7 +1076,6 @@ async function syncReadings() {
       }
     } catch (e) {
       console.error('Pull/merge from GitHub failed:', e);
-      // Non-fatal: continue with push
     }
   }
 
@@ -1052,7 +1098,7 @@ async function syncReadings() {
     }
   }
 
-  // Phase 1: GitHub — push full export (all readings, not just changed)
+  // GitHub — push full export (all readings, not just changed)
   if (hasGitHub) {
     const exportPayload = {
       version: 1,
@@ -1077,7 +1123,6 @@ async function syncReadings() {
 
     const content = JSON.stringify(exportPayload, null, 2);
 
-    // Try cached SHA first, fall back to fetching
     const { ocGitHubSha } = await chrome.storage.local.get('ocGitHubSha');
     let sha = ocGitHubSha || null;
     if (!sha) {
@@ -1087,7 +1132,6 @@ async function syncReadings() {
 
     githubOk = await githubPushFile(ghToken, ghOwner, ghRepo, syncPath, content, sha);
 
-    // SHA conflict retry: re-fetch fresh SHA and try once more
     if (!githubOk && sha) {
       const fresh = await githubGetFile(ghToken, ghOwner, ghRepo, syncPath);
       if (fresh?.sha) {
@@ -1096,57 +1140,16 @@ async function syncReadings() {
     }
   }
 
-  // Phase 1.5: Markdown notes sync (Obsidian-compatible)
+  // Markdown notes sync (Obsidian-compatible)
   if (hasGitHub && ghNotesDir) {
     try {
       await syncMarkdownNotes(ghToken, ghOwner, ghRepo, ghNotesDir, changedKeys, readings, allHighlights);
     } catch (e) {
       console.error('Markdown notes sync failed:', e);
-      // Non-fatal: don't affect githubOk/telegramOk/syncedAt
     }
   }
 
-  // Phase 1.75: Auto-extract concepts if enabled (fire-and-forget)
-  const { autoExtract } = await chrome.storage.sync.get('autoExtract');
-  if (autoExtract && changedKeys.length > 0) {
-    extractConceptsBatch(changedKeys).catch(e => console.error('Auto-extract failed:', e));
-  }
-
-  // Phase 1.8: Supabase readings/highlights sync (cross-device)
-  try {
-    const auth = await getAuthContext();
-    if (auth) {
-      // Pull remote readings & highlights
-      const remote = await pullReadings(auth.token, auth.userId);
-
-      // Merge with local
-      const allStorage = await chrome.storage.local.get(null);
-      const merged = await mergeReadings(
-        { readings, highlights: extractHighlights(allStorage) },
-        remote
-      );
-
-      if (merged.changed) {
-        // Apply merged readings
-        Object.assign(readings, merged.readings);
-        await saveReadings(readings);
-
-        // Apply merged highlights
-        for (const [key, hl] of Object.entries(merged.highlights)) {
-          await chrome.storage.local.set({ [key]: hl });
-        }
-      }
-
-      // Push local to remote (re-read storage after potential merge)
-      const freshStorage = merged.changed ? await chrome.storage.local.get(null) : allStorage;
-      await pushReadings(auth.token, auth.userId, readings, freshStorage);
-    }
-  } catch (e) {
-    console.error('Supabase readings sync failed:', e);
-    // Non-fatal: continue with rest of sync
-  }
-
-  // Phase 2: Telegram — send diff message for changed readings only
+  // Telegram — send diff message for changed readings only
   if (hasTelegram) {
     const changedEntries = changedKeys.map(k => ({
       reading: readings[k],
@@ -1156,7 +1159,6 @@ async function syncReadings() {
 
     let diffMsg = buildDiffMessage(changedEntries);
     if (diffMsg) {
-      // Telegram has a 4096 char limit per message
       if (diffMsg.length > 4000) {
         diffMsg = diffMsg.slice(0, 3980) + '\n\n… (truncated)';
       }
@@ -1164,7 +1166,7 @@ async function syncReadings() {
     }
   }
 
-  // Phase 3: Stamp syncedAt only if all configured channels succeeded
+  // Stamp syncedAt only if all configured channels succeeded
   const allOk = (!hasGitHub || githubOk) && (!hasTelegram || telegramOk);
   if (allOk) {
     const now = new Date().toISOString();
@@ -1175,11 +1177,6 @@ async function syncReadings() {
   }
 
   await updateBadge();
-
-  // Phase 4: Sync library PDFs via Supabase Storage (fire-and-forget, don't block reading sync)
-  syncLibraryPdfs()
-    .then(r => { if (r && (r.uploaded > 0 || r.downloaded > 0)) console.log(`PDF sync: ${r.uploaded} uploaded, ${r.downloaded} downloaded`); })
-    .catch(e => console.error('Library PDF sync failed:', e));
 
   const synced = allOk ? changedKeys.length : 0;
   const failed = allOk ? 0 : changedKeys.length;
