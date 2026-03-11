@@ -106,20 +106,13 @@ async function autofill() {
 
   currentPageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
 
-  // Detect PDF pages and show "Open in Reader" button
-  // Disabled: text layer quality needs improvement before promoting this
-  // const isPdf = tab.url.toLowerCase().endsWith('.pdf') ||
-  //   /^https:\/\/(www\.)?arxiv\.org\/pdf\//.test(tab.url);
-  // if (isPdf) {
-  //   const readerBtn = document.getElementById('hl-open-reader');
-  //   readerBtn.style.display = 'block';
-  //   readerBtn.addEventListener('click', () => {
-  //     chrome.tabs.update(tab.id, {
-  //       url: chrome.runtime.getURL('reader.html?url=' + encodeURIComponent(tab.url))
-  //     });
-  //     window.close();
-  //   });
-  // }
+  // Check if this tab is a linked conversation for another reading
+  try {
+    const resolved = await chrome.runtime.sendMessage({ type: 'oc-resolve-conversation', url: tab.url });
+    if (resolved?.pageKey) {
+      currentPageKey = resolved.pageKey;
+    }
+  } catch (e) {}
 
   // Check if a reading already exists for this page
   let reading;
