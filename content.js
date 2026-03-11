@@ -591,7 +591,7 @@
 
   // ── Toolbar (used outside highlight mode) ──────────────────────
   // Sites where native selection UI conflicts with our toolbar above the selection
-  const showToolbarBelow = /^(claude\.ai|chatgpt\.com)$/.test(location.hostname.replace(/^www\./, ''));
+  const showToolbarBelow = /(^|\.)claude\.ai$|(^|\.)chatgpt\.com$/.test(location.hostname);
 
   function showToolbar(x, y, text, range) {
     removeToolbar();
