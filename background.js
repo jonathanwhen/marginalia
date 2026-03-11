@@ -199,6 +199,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.type === 'oc-resolve-conversation') {
+    // Check if this URL is linked as a conversationUrl on any reading.
+    // Matches if the stored conversationUrl is a prefix of (or equal to) the
+    // current tab URL, so claude.ai/chat/abc matches even with query params.
+    getReadings().then(readings => {
+      const url = msg.url.replace(/\/+$/, '');
+      for (const [pk, r] of Object.entries(readings)) {
+        if (!r.conversationUrl) continue;
+        const conv = r.conversationUrl.replace(/\/+$/, '');
+        if (url === conv || url.startsWith(conv + '?') || url.startsWith(conv + '#')) {
+          sendResponse({ pageKey: pk, reading: r });
+          return;
+        }
+      }
+      sendResponse(null);
+    });
+    return true;
+  }
   if (msg.type === 'oc-highlight-changed') {
     handleHighlightChanged(msg, _sender.tab).then(() => sendResponse({ ok: true }));
     return true;

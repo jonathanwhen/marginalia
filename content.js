@@ -13,7 +13,27 @@
   let sidebar = null;
   let sidebarSaveTimer = null;
 
-  const pageKey = () => location.origin + location.pathname;
+  // ── Page key resolution ──────────────────────────────────────────
+  // If this tab's URL is linked as a conversationUrl on a reading,
+  // route all highlights/notes to that reading's pageKey instead.
+  let _resolvedPageKey = null;
+  let _linkedReadingTitle = null;
+  const pageKey = () => _resolvedPageKey || (location.origin + location.pathname);
+
+  function resolvePageKey() {
+    try {
+      chrome.runtime.sendMessage(
+        { type: 'oc-resolve-conversation', url: location.href },
+        response => {
+          if (response?.pageKey) {
+            _resolvedPageKey = response.pageKey;
+            _linkedReadingTitle = response.reading?.title || null;
+          }
+        }
+      );
+    } catch (e) {}
+  }
+  resolvePageKey();
   const isPdf = document.contentType === 'application/pdf' || location.pathname.toLowerCase().endsWith('.pdf');
 
   // ── HTML escaping ──────────────────────────────────────────────────
@@ -911,19 +931,23 @@
     sidebar = document.createElement('div');
     sidebar.id = 'oc-sidebar';
 
-    const titleText = document.title || pageKey();
+    const isLinkedConversation = !!_resolvedPageKey;
+    const titleText = _linkedReadingTitle || document.title || pageKey();
     const truncTitle = titleText.length > 40 ? titleText.slice(0, 40) + '…' : titleText;
+
+    const linkedBannerHtml = isLinkedConversation
+      ? `<div class="oc-sb-linked-banner">Linked to: ${escHtml(truncTitle)}</div>`
+      : '';
 
     sidebar.innerHTML = `
       <div class="oc-sb-header">
         <span class="oc-sb-logo">✦</span>
-        <span class="oc-sb-title">Notes: "${truncTitle}"</span>
+        <span class="oc-sb-title">${isLinkedConversation ? 'Notes: "' + escHtml(truncTitle) + '"' : 'Notes: "' + escHtml(truncTitle) + '"'}</span>
         <button class="oc-sb-close" title="Close (Esc)">✕</button>
       </div>
+      ${linkedBannerHtml}
       <div class="oc-sb-body">
-        <div class="oc-sb-conv-row">
-          <input class="oc-sb-conv-input" type="url" placeholder="Claude conversation URL..." />
-        </div>
+        ${isLinkedConversation ? '' : '<div class="oc-sb-conv-row"><input class="oc-sb-conv-input" type="url" placeholder="Claude conversation URL..." /></div>'}
         <div class="oc-sb-notes-header">
           <span class="oc-sb-label">Notes</span>
           <button class="oc-sb-preview-toggle" title="Toggle preview">Preview</button>
@@ -956,7 +980,7 @@
           if (response?.reading?.notes) {
             textarea.value = response.reading.notes;
           }
-          if (response?.reading?.conversationUrl) {
+          if (convInput && response?.reading?.conversationUrl) {
             convInput.value = response.reading.conversationUrl;
           }
         });
@@ -993,9 +1017,13 @@
     });
 
     // Save conversation URL on change
-    convInput.addEventListener('change', () => {
-      saveSidebarNote(textarea, statusEl, convInput);
-    });
+    if (convInput) {
+      convInput.addEventListener('change', () => {
+        saveSidebarNote(textarea, statusEl, convInput);
+        // Re-resolve pageKey after linking a conversation
+        resolvePageKey();
+      });
+    }
 
     // Cmd/Ctrl+S for immediate save
     textarea.addEventListener('keydown', e => {

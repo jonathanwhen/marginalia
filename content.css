@@ -448,6 +448,16 @@
   padding-left: 2px;
 }
 
+/* Linked conversation banner */
+#oc-sidebar .oc-sb-linked-banner {
+  padding: 6px 14px;
+  background: rgba(232, 168, 124, 0.1);
+  border-bottom: 1px solid rgba(232, 168, 124, 0.2);
+  color: #e8a87c;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 /* Conversation URL input */
 #oc-sidebar .oc-sb-conv-row {
   flex-shrink: 0;
