@@ -146,6 +146,7 @@ async function autofill() {
     document.getElementById('log-author').value = reading.author || '';
     document.getElementById('log-url').value = reading.url || tab.url;
     document.getElementById('log-notes').value = reading.notes || '';
+    document.getElementById('log-conversation-url').value = reading.conversationUrl || '';
     document.getElementById('log-est-pages').value = reading.estPages || '';
     if (reading.tags?.length) selectTags('tags-wrap', reading.tags);
     document.getElementById('note-input').value = reading.notes || '';
@@ -193,6 +194,7 @@ document.getElementById('log-send').addEventListener('click', async () => {
   const author = document.getElementById('log-author').value.trim();
   const url = document.getElementById('log-url').value.trim();
   const notes = document.getElementById('log-notes').value.trim();
+  const conversationUrl = document.getElementById('log-conversation-url').value.trim() || null;
   const estPages = parseInt(document.getElementById('log-est-pages').value, 10) || 0;
   const tags = getSelectedTags('tags-wrap');
 
@@ -208,6 +210,7 @@ document.getElementById('log-send').addEventListener('click', async () => {
       url,
       tags,
       notes,
+      conversationUrl,
       estPages
     });
     if (result?.ok) {
@@ -429,6 +432,7 @@ function getLogFormData() {
     author: document.getElementById('log-author').value.trim(),
     url: document.getElementById('log-url').value.trim(),
     notes: document.getElementById('log-notes').value.trim(),
+    conversationUrl: document.getElementById('log-conversation-url').value.trim() || null,
     estPages: parseInt(document.getElementById('log-est-pages').value, 10) || 0,
     tags: getSelectedTags('tags-wrap')
   };
@@ -450,6 +454,7 @@ window.addEventListener('pagehide', () => {
       author: form.author || undefined,
       url: form.url || undefined,
       notes: form.notes || undefined,
+      conversationUrl: form.conversationUrl || undefined,
       estPages: form.estPages || undefined,
       tags: form.tags.length ? form.tags : undefined
     });
