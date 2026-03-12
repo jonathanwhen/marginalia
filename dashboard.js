@@ -172,6 +172,8 @@ function computeStats(readings) {
   let lastWeekPages = 0;
 
   for (const r of readings) {
+    // Skip video readings from page-based stats
+    if (r.mediaType === 'video') continue;
     if (r.readingLog && Object.keys(r.readingLog).length > 0) {
       for (const [date, pages] of Object.entries(r.readingLog)) {
         totalPages += pages;
@@ -202,6 +204,8 @@ function computeDailyData(readings) {
   today.setHours(0, 0, 0, 0);
 
   for (const r of readings) {
+    // Skip video readings from page-based sparklines
+    if (r.mediaType === 'video') continue;
     if (r.readingLog && Object.keys(r.readingLog).length > 0) {
       // Distribute pages from readingLog across their respective days
       for (const [dateStr, pages] of Object.entries(r.readingLog)) {
@@ -322,9 +326,10 @@ function renderHeatmap(readings) {
   const CELL_SIZE = 12;
   const GAP = 3;
 
-  // Build day -> pages map using local dates
+  // Build day -> pages map using local dates (exclude video readings)
   const dayPages = {};
   for (const r of readings) {
+    if (r.mediaType === 'video') continue;
     if (r.readingLog && Object.keys(r.readingLog).length > 0) {
       for (const [date, pages] of Object.entries(r.readingLog)) {
         dayPages[date] = (dayPages[date] || 0) + pages;
@@ -506,7 +511,7 @@ function renderTable(readings) {
       <td class="col-title" title="${esc(r.title)}"><span class="title-text">${titlePrefix}${esc(r.title || '(untitled)')}</span>${progressHtml}</td>
       <td class="col-author">${esc(r.author || '\u2014')}</td>
       <td class="col-tags">${tagsHtml || '<span style="color:var(--text-4)">\u2014</span>'}</td>
-      <td class="col-pages">${r.estPages || '\u2014'}</td>
+      <td class="col-pages">${r.mediaType === 'video' ? (r.duration ? r.duration + ' min' : '\u2014') : (r.estPages || '\u2014')}</td>
       <td class="col-hl">${hlBadge}</td>
       <td class="col-date">${esc(formatDate(r.createdAt))}</td>
       <td class="col-actions"><button class="row-delete" data-pk="${esc(r.pageKey)}" title="Delete">\u00d7</button></td>
@@ -678,17 +683,21 @@ async function toggleDetail(tr, detailTr, reading) {
   let progressHtml = `<div class="reading-progress">
     <h4 class="detail-section-title">Reading Progress</h4>`;
 
-  if (reading.estPages) {
-    const pct = Math.min(Math.round((loggedTotal / reading.estPages) * 100), 100);
-    progressHtml += `<div class="rp-summary">${loggedTotal} / ${reading.estPages} pages
+  const isVideo = reading.mediaType === 'video';
+  const unit = isVideo ? 'minutes' : 'pages';
+  const totalEst = isVideo ? reading.duration : reading.estPages;
+
+  if (totalEst) {
+    const pct = Math.min(Math.round((loggedTotal / totalEst) * 100), 100);
+    progressHtml += `<div class="rp-summary">${loggedTotal} / ${totalEst} ${unit}
       <div class="rp-bar"><div class="rp-bar-fill" style="width:${pct}%"></div></div></div>`;
   } else if (loggedTotal > 0) {
-    progressHtml += `<div class="rp-summary">${loggedTotal} pages logged</div>`;
+    progressHtml += `<div class="rp-summary">${loggedTotal} ${unit} logged</div>`;
   }
 
   progressHtml += `<div class="rp-form">
     <input type="date" class="rp-date" value="${todayStr}" />
-    <input type="number" class="rp-pages" min="0" placeholder="Pages" />
+    <input type="number" class="rp-pages" min="0" placeholder="${isVideo ? 'Minutes' : 'Pages'}" />
     <button class="rp-log-btn">Log</button>
   </div>`;
 
@@ -697,7 +706,7 @@ async function toggleDetail(tr, detailTr, reading) {
     for (const [date, pages] of logEntries) {
       progressHtml += `<div class="rp-entry" data-date="${esc(date)}">
         <span class="rp-entry-date">${date}</span>
-        <span class="rp-entry-pages">${pages} pg</span>
+        <span class="rp-entry-pages">${pages} ${isVideo ? 'min' : 'pg'}</span>
         <button class="rp-entry-del" data-date="${esc(date)}">&times;</button>
       </div>`;
     }

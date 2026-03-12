@@ -29,7 +29,7 @@ function needsSync(reading) {
 }
 
 // ── Upsert reading ───────────────────────────────────────────────────
-function upsertReading({ pageKey, title, author, url, tags, notes, estPages }) {
+function upsertReading({ pageKey, title, author, url, tags, notes, estPages, conversationUrl, starred, mediaType, duration }) {
   const readings = getReadings();
   const now = new Date().toISOString();
   const existing = readings[pageKey];
@@ -45,6 +45,10 @@ function upsertReading({ pageKey, title, author, url, tags, notes, estPages }) {
     estPages: estPages ?? existing?.estPages ?? 0,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    conversationUrl: conversationUrl ?? existing?.conversationUrl ?? null,
+    starred: starred ?? existing?.starred ?? false,
+    mediaType: mediaType ?? existing?.mediaType ?? undefined,
+    duration: duration ?? existing?.duration ?? undefined,
     syncedAt: existing?.syncedAt ?? null,
     ...(existing?.readingLog ? { readingLog: existing.readingLog } : {})
   };

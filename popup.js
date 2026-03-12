@@ -104,7 +104,14 @@ async function autofill() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
 
-  currentPageKey = new URL(tab.url).origin + new URL(tab.url).pathname;
+  const tabUrl = new URL(tab.url);
+  // YouTube: include video ID in pageKey so each video is a separate reading
+  if (tabUrl.hostname === 'www.youtube.com' || tabUrl.hostname === 'youtube.com') {
+    const v = tabUrl.searchParams.get('v');
+    currentPageKey = tabUrl.origin + tabUrl.pathname + (v ? '?v=' + v : '');
+  } else {
+    currentPageKey = tabUrl.origin + tabUrl.pathname;
+  }
 
   // Check if this tab is a linked conversation for another reading
   try {
@@ -113,6 +120,17 @@ async function autofill() {
       currentPageKey = resolved.pageKey;
     }
   } catch (e) {}
+
+  // Detect YouTube videos
+  const isYouTube = tabUrl.hostname === 'www.youtube.com' || tabUrl.hostname === 'youtube.com';
+  if (isYouTube) {
+    // Relabel the pages field for video duration
+    const pagesLabel = document.querySelector('label[for="log-est-pages"]')
+      || document.getElementById('log-est-pages')?.closest('.field')?.querySelector('label');
+    if (pagesLabel) pagesLabel.textContent = 'Duration (min)';
+    const pagesInput = document.getElementById('log-est-pages');
+    if (pagesInput) pagesInput.placeholder = 'Video length in minutes';
+  }
 
   // Check if a reading already exists for this page
   let reading;
@@ -133,6 +151,24 @@ async function autofill() {
     return 0;
   }
 
+  // Extract video duration from YouTube page (ISO 8601 meta tag)
+  async function fetchVideoDuration() {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const dur = document.querySelector('meta[itemprop="duration"]')?.content;
+          if (!dur) return 0;
+          const m = dur.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+          if (!m) return 0;
+          return (parseInt(m[1] || 0) * 60) + parseInt(m[2] || 0) + (parseInt(m[3] || 0) >= 30 ? 1 : 0);
+        }
+      });
+      return results?.[0]?.result || 0;
+    } catch (e) {}
+    return 0;
+  }
+
   if (reading) {
     // Pre-fill from existing reading
     document.getElementById('log-title').value = reading.title || '';
@@ -140,7 +176,7 @@ async function autofill() {
     document.getElementById('log-url').value = reading.url || tab.url;
     document.getElementById('log-notes').value = reading.notes || '';
     document.getElementById('log-conversation-url').value = reading.conversationUrl || '';
-    document.getElementById('log-est-pages').value = reading.estPages || '';
+    document.getElementById('log-est-pages').value = reading.estPages || reading.duration || '';
     if (reading.tags?.length) selectTags('tags-wrap', reading.tags);
     document.getElementById('note-input').value = reading.notes || '';
     document.getElementById('log-send').textContent = 'Update Reading';
@@ -149,36 +185,62 @@ async function autofill() {
     updateStarButton(reading.starred);
 
 
-    // Backfill page estimate if missing
-    if (!reading.estPages) {
-      const estPages = await fetchEstPages();
-      if (estPages) document.getElementById('log-est-pages').value = estPages;
+    // Backfill estimate if missing
+    if (!reading.estPages && !reading.duration) {
+      if (isYouTube) {
+        const dur = await fetchVideoDuration();
+        if (dur) document.getElementById('log-est-pages').value = dur;
+      } else {
+        const estPages = await fetchEstPages();
+        if (estPages) document.getElementById('log-est-pages').value = estPages;
+      }
     }
   } else {
     // Auto-fill from tab metadata
     if (tab.title) document.getElementById('log-title').value = tab.title;
     if (tab.url) document.getElementById('log-url').value = tab.url;
 
-    // Extract author from page meta tags
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          return (
-            document.querySelector('meta[name="author"]')?.content ||
-            document.querySelector('meta[property="article:author"]')?.content ||
-            document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
-            ''
-          );
-        }
-      });
-      const author = results?.[0]?.result;
-      if (author) document.getElementById('log-author').value = author;
-    } catch (e) {}
+    if (isYouTube) {
+      // Extract channel name and video duration
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            const channel = document.querySelector('#channel-name a')?.textContent?.trim()
+              || document.querySelector('ytd-channel-name a')?.textContent?.trim()
+              || document.querySelector('meta[itemprop="author"] link[itemprop="name"]')?.getAttribute('content')
+              || '';
+            return channel;
+          }
+        });
+        const channel = results?.[0]?.result;
+        if (channel) document.getElementById('log-author').value = channel;
+      } catch (e) {}
 
-    // Estimate pages from word count
-    const estPages = await fetchEstPages();
-    if (estPages) document.getElementById('log-est-pages').value = estPages;
+      const dur = await fetchVideoDuration();
+      if (dur) document.getElementById('log-est-pages').value = dur;
+    } else {
+      // Extract author from page meta tags
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => {
+            return (
+              document.querySelector('meta[name="author"]')?.content ||
+              document.querySelector('meta[property="article:author"]')?.content ||
+              document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
+              ''
+            );
+          }
+        });
+        const author = results?.[0]?.result;
+        if (author) document.getElementById('log-author').value = author;
+      } catch (e) {}
+
+      // Estimate pages from word count
+      const estPages = await fetchEstPages();
+      if (estPages) document.getElementById('log-est-pages').value = estPages;
+    }
   }
 
   autofillDone = true;
@@ -211,6 +273,16 @@ document.getElementById('log-send').addEventListener('click', async () => {
   if (!title) { showToast('Title required', 'error'); return; }
   if (!currentPageKey) { showToast('No page context', 'error'); return; }
 
+  // Detect if this is a video reading (YouTube)
+  let mediaType, duration;
+  try {
+    const parsedUrl = new URL(url || currentPageKey);
+    if (parsedUrl.hostname === 'www.youtube.com' || parsedUrl.hostname === 'youtube.com') {
+      mediaType = 'video';
+      duration = estPages; // the field holds minutes for video readings
+    }
+  } catch (e) {}
+
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'oc-upsert-reading',
@@ -221,7 +293,9 @@ document.getElementById('log-send').addEventListener('click', async () => {
       tags,
       notes,
       conversationUrl,
-      estPages
+      estPages: mediaType === 'video' ? undefined : estPages,
+      mediaType,
+      duration
     });
     if (result?.ok) {
       showToast(result.created ? 'Reading logged' : 'Reading updated');
@@ -469,13 +543,22 @@ async function updateTodayPages() {
 // When the popup closes (click outside, tab switch, etc.), auto-save
 // the Log form so the user doesn't lose edits or need to press "Update Reading".
 function getLogFormData() {
+  const url = document.getElementById('log-url').value.trim();
+  let isVideo = false;
+  try {
+    const u = new URL(url || currentPageKey);
+    isVideo = u.hostname === 'www.youtube.com' || u.hostname === 'youtube.com';
+  } catch (e) {}
+  const numVal = parseInt(document.getElementById('log-est-pages').value, 10) || 0;
   return {
     title: document.getElementById('log-title').value.trim(),
     author: document.getElementById('log-author').value.trim(),
-    url: document.getElementById('log-url').value.trim(),
+    url,
     notes: document.getElementById('log-notes').value.trim(),
     conversationUrl: document.getElementById('log-conversation-url').value.trim() || null,
-    estPages: parseInt(document.getElementById('log-est-pages').value, 10) || 0,
+    estPages: isVideo ? 0 : numVal,
+    mediaType: isVideo ? 'video' : undefined,
+    duration: isVideo ? numVal : undefined,
     tags: getSelectedTags('tags-wrap')
   };
 }
@@ -498,6 +581,8 @@ window.addEventListener('pagehide', () => {
       notes: form.notes || undefined,
       conversationUrl: form.conversationUrl || undefined,
       estPages: form.estPages || undefined,
+      mediaType: form.mediaType || undefined,
+      duration: form.duration || undefined,
       tags: form.tags.length ? form.tags : undefined
     });
   } catch (e) {}

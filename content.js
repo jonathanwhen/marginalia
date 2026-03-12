@@ -18,7 +18,15 @@
   // route all highlights/notes to that reading's pageKey instead.
   let _resolvedPageKey = null;
   let _linkedReadingTitle = null;
-  const pageKey = () => _resolvedPageKey || (location.origin + location.pathname);
+  // For YouTube, include the video ID query param so each video gets its own reading
+  function defaultPageKey() {
+    if (location.hostname === 'www.youtube.com' || location.hostname === 'youtube.com') {
+      const v = new URLSearchParams(location.search).get('v');
+      if (v) return location.origin + location.pathname + '?v=' + v;
+    }
+    return location.origin + location.pathname;
+  }
+  const pageKey = () => _resolvedPageKey || defaultPageKey();
 
   function resolvePageKey() {
     try {
@@ -880,21 +888,39 @@
   function ensureReadingExists() {
     if (!isContextValid()) return;
     try {
-      const author =
-        document.querySelector('meta[name="author"]')?.content ||
-        document.querySelector('meta[property="article:author"]')?.content ||
-        document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
-        undefined;
-      const wordCount = document.body?.innerText?.split(/\s+/).length || 0;
-      const estPages = wordCount > 0 ? Math.max(1, Math.round(wordCount / 275)) : undefined;
-      chrome.runtime.sendMessage({
+      const isYouTube = location.hostname === 'www.youtube.com' || location.hostname === 'youtube.com';
+      const msg = {
         type: 'oc-upsert-reading',
         pageKey: pageKey(),
         title: document.title || pageKey(),
-        url: location.href,
-        author,
-        estPages
-      });
+        url: location.href
+      };
+
+      if (isYouTube) {
+        // YouTube: extract channel name and video duration
+        msg.mediaType = 'video';
+        const channel = document.querySelector('#channel-name a')?.textContent?.trim()
+          || document.querySelector('ytd-channel-name a')?.textContent?.trim()
+          || document.querySelector('meta[itemprop="author"] link[itemprop="name"]')?.getAttribute('content');
+        if (channel) msg.author = channel;
+        // Duration from the video player or structured data
+        const durMeta = document.querySelector('meta[itemprop="duration"]')?.content;
+        if (durMeta) {
+          // ISO 8601 duration like PT12M34S or PT1H2M3S
+          const m = durMeta.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+          if (m) msg.duration = (parseInt(m[1] || 0) * 60) + parseInt(m[2] || 0) + (parseInt(m[3] || 0) >= 30 ? 1 : 0);
+        }
+      } else {
+        msg.author =
+          document.querySelector('meta[name="author"]')?.content ||
+          document.querySelector('meta[property="article:author"]')?.content ||
+          document.querySelector('[class*="author"] [itemprop="name"]')?.textContent?.trim() ||
+          undefined;
+        const wordCount = document.body?.innerText?.split(/\s+/).length || 0;
+        msg.estPages = wordCount > 0 ? Math.max(1, Math.round(wordCount / 275)) : undefined;
+      }
+
+      chrome.runtime.sendMessage(msg);
     } catch (e) {}
   }
 

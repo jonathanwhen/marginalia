@@ -384,7 +384,7 @@ async function estimatePages(tabId) {
 }
 
 // ── Upsert a reading entry ──────────────────────────────────────────
-async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content, conversationUrl, starred }) {
+async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content, conversationUrl, starred, mediaType, duration }) {
   const readings = await getReadings();
   const now = new Date().toISOString();
   const existing = readings[pageKey];
@@ -407,6 +407,8 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
     updatedAt: now,
     conversationUrl: conversationUrl ?? existing?.conversationUrl ?? null,
     starred: starred ?? existing?.starred ?? false,
+    mediaType: mediaType ?? existing?.mediaType ?? undefined,
+    duration: duration ?? existing?.duration ?? undefined,
     syncedAt: existing?.syncedAt ?? null,
     ...(existing?.readingLog ? { readingLog: existing.readingLog } : {})
   };
@@ -482,6 +484,8 @@ async function getTodayPages() {
   let pages = 0;
   let count = 0;
   for (const r of Object.values(readings)) {
+    // Skip video readings from page count
+    if (r.mediaType === 'video') continue;
     if (r.readingLog) {
       // Use readingLog entry for today if present
       if (r.readingLog[todayStr]) {
