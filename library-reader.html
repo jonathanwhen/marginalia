@@ -21,6 +21,8 @@
     <div class="toolbar-left">
       <a href="library.html" class="toolbar-back" title="Back to Library">&larr;</a>
       <span class="toolbar-title" id="toolbar-title">Loading...</span>
+      <button class="toolbar-edit-btn" id="btn-edit-meta" title="Edit title &amp; author (E)">&#9998;</button>
+      <span class="toolbar-author" id="toolbar-author"></span>
     </div>
     <div class="toolbar-center">
       <button class="toolbar-btn" id="btn-search" title="Find in document (⌘F)">Find</button>
@@ -42,6 +44,22 @@
       <button class="toolbar-btn" id="btn-export" title="Export highlights as Markdown">Export</button>
       <button class="toolbar-btn" id="btn-share" title="Share annotations">Share</button>
       <button class="toolbar-btn" id="btn-sidebar" title="Toggle notes sidebar">Notes</button>
+    </div>
+  </div>
+
+  <!-- Meta edit panel -->
+  <div class="meta-edit-panel hidden" id="meta-edit-panel">
+    <div class="meta-field">
+      <label>Title</label>
+      <input type="text" id="meta-title" placeholder="Title" />
+    </div>
+    <div class="meta-field">
+      <label>Author</label>
+      <input type="text" id="meta-author" placeholder="Author" />
+    </div>
+    <div class="meta-actions">
+      <button class="meta-save" id="meta-save">Save</button>
+      <button class="meta-cancel" id="meta-cancel">Cancel</button>
     </div>
   </div>
 

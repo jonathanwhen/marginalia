@@ -92,6 +92,43 @@ body {
 .toolbar-zoom { font-size: 12px; color: var(--text-2); min-width: 40px; text-align: center; }
 .toolbar-status { font-size: 11px; color: var(--text-3); margin-left: 6px; white-space: nowrap; }
 .toolbar-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+.toolbar-edit-btn {
+  background: transparent; border: none; color: var(--text-3);
+  cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px;
+  transition: color 0.15s; flex-shrink: 0;
+}
+.toolbar-edit-btn:hover { color: var(--accent); }
+.toolbar-author {
+  font-size: 11px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Meta edit panel ── */
+.meta-edit-panel {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 8px 12px; display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
+.meta-edit-panel.hidden { display: none; }
+.meta-field { display: flex; align-items: center; gap: 6px; }
+.meta-field label { font-size: 11px; color: var(--text-3); min-width: 40px; }
+.meta-field input {
+  background: var(--bg); border: 1px solid var(--border-2); border-radius: 5px;
+  color: var(--text); font-size: 13px; padding: 5px 10px; outline: none;
+  font-family: var(--font);
+}
+.meta-field input:focus { border-color: var(--accent); }
+#meta-title { width: 280px; }
+#meta-author { width: 200px; }
+.meta-save {
+  background: var(--accent); color: var(--bg); border: none;
+  padding: 5px 14px; border-radius: 5px; font-size: 12px;
+  cursor: pointer; font-weight: 600; font-family: var(--font);
+}
+.meta-cancel {
+  background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border-2);
+  padding: 5px 14px; border-radius: 5px; font-size: 12px;
+  cursor: pointer; font-family: var(--font);
+}
 
 /* ── Color picker ── */
 .color-picker { display: flex; align-items: center; gap: 4px; }

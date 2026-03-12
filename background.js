@@ -4,6 +4,7 @@ import { listRemotePdfs, uploadPdf, downloadPdf } from './lib/pdf-sync.js';
 import { getAllTranscriptsMeta, getTranscript, putTranscript } from './lib/db.js';
 import { createCollabPage, joinCollabPage, pushAnnotation, pullAnnotations, deleteAnnotation, getCollabForPage, subscribeToAnnotations } from './lib/collab.js';
 import { pushReadings, pullReadings, mergeReadings } from './lib/readings-sync.js';
+import { buildMarkdownForReading, slugify } from './lib/markdown-export.js';
 
 function localDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -823,7 +824,8 @@ async function extractConceptsBatch(pageKeys) {
 // ── Markdown notes sync (Obsidian-compatible) ────────────────────────
 
 function makeMarkdownFilename(reading, pageKey) {
-  // Slugify title: lowercase, strip special chars, collapse hyphens, max 60 chars
+  // Keep the original slug algorithm for filenames to avoid orphaning
+  // existing files synced to GitHub (shared slugify uses a different regex)
   const slug = (reading.title || 'untitled')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
@@ -840,68 +842,6 @@ function makeMarkdownFilename(reading, pageKey) {
   const hashStr = Math.abs(hash).toString(36).slice(0, 6).padEnd(6, '0');
 
   return `${slug}-${hashStr}.md`;
-}
-
-function buildMarkdownContent(pageKey, reading, highlights) {
-  const lines = ['---'];
-
-  // YAML frontmatter
-  lines.push(`title: "${(reading.title || '').replace(/"/g, '\\"')}"`);
-  if (reading.author) lines.push(`author: "${reading.author.replace(/"/g, '\\"')}"`);
-  if (reading.tags?.length) lines.push(`tags: [${reading.tags.map(t => `"${t}"`).join(', ')}]`);
-  if (reading.url) lines.push(`url: "${reading.url}"`);
-  if (reading.conversationUrl) lines.push(`conversation: "${reading.conversationUrl}"`);
-  if (reading.estPages) lines.push(`pages: ${reading.estPages}`);
-  lines.push(`created: "${reading.createdAt || ''}"`);
-  lines.push(`updated: "${reading.updatedAt || ''}"`);
-  lines.push('---');
-  lines.push('');
-
-  // Title
-  lines.push(`# ${reading.title || 'Untitled'}`);
-  lines.push('');
-
-  // Notes
-  if (reading.notes) {
-    lines.push('## Notes');
-    lines.push('');
-    lines.push(reading.notes);
-    lines.push('');
-  }
-
-  // Reading log
-  if (reading.readingLog && Object.keys(reading.readingLog).length) {
-    lines.push('## Reading Log');
-    lines.push('');
-    const sortedDates = Object.keys(reading.readingLog).sort();
-    for (const date of sortedDates) {
-      lines.push(`- ${date}: ${reading.readingLog[date]} pages`);
-    }
-    lines.push('');
-  }
-
-  // Highlights
-  if (highlights?.length) {
-    lines.push('## Highlights');
-    lines.push('');
-
-    const sorted = [...highlights].sort((a, b) =>
-      (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || (a.startOffset ?? 0) - (b.startOffset ?? 0)
-    );
-
-    for (const h of sorted) {
-      lines.push(`> ${h.text}`);
-      if (h.latex) lines.push(`> **LaTeX:** \`${h.latex}\``);
-      if (h.comment) lines.push(`> — *${h.comment}*`);
-      const meta = [];
-      if (h.pageIndex !== undefined) meta.push(`Page ${h.pageIndex + 1}`);
-      if (h.color && h.color !== 'orange') meta.push(h.color);
-      if (meta.length) lines.push(`> *(${meta.join(', ')})*`);
-      lines.push('');
-    }
-  }
-
-  return lines.join('\n');
 }
 
 async function pushMarkdownFile(ghToken, ghOwner, ghRepo, dir, filename, content, shaCache) {
@@ -964,12 +904,19 @@ async function syncMarkdownNotes(ghToken, ghOwner, ghRepo, ghNotesDir, changedKe
   const { ocMarkdownShas = {} } = await chrome.storage.local.get('ocMarkdownShas');
   let pushed = 0, failed = 0;
 
+  // Build slugMap from all readings for backlinks (not just changed ones)
+  const slugMap = {};
+  for (const pk of Object.keys(readings)) {
+    const r = readings[pk];
+    if (r) slugMap[slugify(r.title)] = r;
+  }
+
   for (const key of changedKeys) {
     const reading = readings[key];
     if (!reading) continue;
 
     const filename = makeMarkdownFilename(reading, key);
-    const content = buildMarkdownContent(key, reading, allHighlights[key] || []);
+    const content = buildMarkdownForReading(reading, allHighlights[key] || [], slugMap);
     const newSha = await pushMarkdownFile(ghToken, ghOwner, ghRepo, ghNotesDir, filename, content, ocMarkdownShas);
 
     if (newSha) {

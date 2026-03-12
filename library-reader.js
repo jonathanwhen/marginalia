@@ -1,5 +1,5 @@
 import * as pdfjsLib from './lib/pdf.min.mjs';
-import { getTranscript } from './lib/db.js';
+import { getTranscript, updateTranscriptField } from './lib/db.js';
 import { shareAnnotations, getShareUrl, getCurrentUser } from './lib/supabase.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.mjs');
@@ -9,6 +9,7 @@ let pdfDoc = null;
 let currentScale = 1.5;
 let currentPageKey = null;
 let currentTitle = '';
+let currentAuthor = '';
 let pageContainers = [];
 let highlights = [];
 let highlightMode = false;
@@ -43,6 +44,10 @@ const searchBar = document.getElementById('search-bar');
 const searchInput = document.getElementById('search-input');
 const searchCount = document.getElementById('search-count');
 const toast = document.getElementById('toast');
+const toolbarAuthor = document.getElementById('toolbar-author');
+const metaEditPanel = document.getElementById('meta-edit-panel');
+const metaTitleInput = document.getElementById('meta-title');
+const metaAuthorInput = document.getElementById('meta-author');
 
 // ── Color map for highlight rendering ────────────────────────────────
 const HL_COLORS = {
@@ -128,8 +133,10 @@ async function loadLibraryPdf(key) {
   }
 
   currentTitle = transcript.title || '';
+  currentAuthor = transcript.author || '';
   document.title = `Marginalia — ${currentTitle}`;
   toolbarTitle.textContent = currentTitle;
+  toolbarAuthor.textContent = currentAuthor ? `by ${currentAuthor}` : '';
 
   const doc = await pdfjsLib.getDocument({ data: transcript.pdfData }).promise;
   await renderDocument(doc);
@@ -1201,12 +1208,76 @@ function notifyHighlightChanged(action, text, highlightId) {
   } catch {}
 }
 
+// ── Meta editing (title & author) ────────────────────────────────────
+document.getElementById('btn-edit-meta').addEventListener('click', toggleMetaEdit);
+document.getElementById('meta-save').addEventListener('click', saveMetaEdit);
+document.getElementById('meta-cancel').addEventListener('click', closeMetaEdit);
+
+function toggleMetaEdit() {
+  if (metaEditPanel.classList.contains('hidden')) {
+    metaTitleInput.value = currentTitle;
+    metaAuthorInput.value = currentAuthor;
+    metaEditPanel.classList.remove('hidden');
+    metaTitleInput.focus();
+    metaTitleInput.select();
+  } else {
+    closeMetaEdit();
+  }
+}
+
+function closeMetaEdit() {
+  metaEditPanel.classList.add('hidden');
+}
+
+async function saveMetaEdit() {
+  const newTitle = metaTitleInput.value.trim();
+  const newAuthor = metaAuthorInput.value.trim();
+  if (!currentPageKey) return;
+
+  const titleChanged = newTitle && newTitle !== currentTitle;
+  const authorChanged = newAuthor !== currentAuthor;
+  if (!titleChanged && !authorChanged) { closeMetaEdit(); return; }
+
+  // Update local state + IndexedDB
+  if (titleChanged) {
+    currentTitle = newTitle;
+    toolbarTitle.textContent = currentTitle;
+    document.title = `Marginalia — ${currentTitle}`;
+    await updateTranscriptField(currentPageKey, 'title', newTitle);
+  }
+  if (authorChanged) {
+    currentAuthor = newAuthor;
+    toolbarAuthor.textContent = newAuthor ? `by ${newAuthor}` : '';
+    await updateTranscriptField(currentPageKey, 'author', newAuthor);
+  }
+
+  // Single message to sync both fields
+  const msg = { type: 'oc-upsert-reading', pageKey: currentPageKey };
+  if (titleChanged) msg.title = newTitle;
+  if (authorChanged) msg.author = newAuthor;
+  await chrome.runtime.sendMessage(msg);
+
+  closeMetaEdit();
+}
+
+metaTitleInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') saveMetaEdit();
+  if (e.key === 'Escape') closeMetaEdit();
+});
+metaAuthorInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Enter') saveMetaEdit();
+  if (e.key === 'Escape') closeMetaEdit();
+});
+
 // ── Keyboard shortcuts ───────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   const tag = document.activeElement?.tagName;
   const isInput = tag === 'INPUT' || tag === 'TEXTAREA';
 
   if (e.key === 'Escape') {
+    if (!metaEditPanel.classList.contains('hidden')) { closeMetaEdit(); return; }
     if (!searchBar.classList.contains('hidden')) { closeSearch(); return; }
     if (highlightMode) { exitHighlightMode(); return; }
     hideHlToolbar();
@@ -1246,6 +1317,11 @@ document.addEventListener('keydown', e => {
   // H → toggle highlight mode (when not typing)
   if (!isInput && e.key === 'h' && !e.metaKey && !e.ctrlKey) {
     if (highlightMode) exitHighlightMode(); else enterHighlightMode();
+  }
+
+  // E → toggle meta edit panel (when not typing)
+  if (!isInput && e.key === 'e' && !e.metaKey && !e.ctrlKey) {
+    toggleMetaEdit();
   }
 });
 

@@ -36,6 +36,9 @@ Click the extension icon on any page to open the popup.
 - **Auto-detection**: Title, author, and estimated page count are pulled from the page automatically.
 - **Tags**: Choose from preset categories — `AI/ML Research`, `Healthcare/Bio`, `Philosophy`, `Economics/Finance`, `Research Craft`, `General Learning`, `To Revisit`. Multiple tags allowed.
 - **Notes**: Freeform text field for key takeaways.
+- **Starring**: Click the star icon to mark a reading as a favorite. Starred readings appear in Obsidian export frontmatter (`starred: true`) and are surfaced in the dashboard.
+- **Conversation link**: Attach a Claude or ChatGPT conversation URL to any reading. The popup auto-detects when you're on a Claude/ChatGPT page and links it to the paper you were discussing. Stored as `conversationUrl` and exported in markdown frontmatter.
+- **Unlog**: Remove a reading from your log via the popup if you logged it by mistake.
 - **Auto-save**: If the form has data when the popup closes, it saves automatically.
 - **Sync Now**: Button at the top triggers an immediate sync to all configured channels.
 
@@ -93,7 +96,7 @@ Open from the popup footer or navigate to the Dashboard page directly.
 **Readings table:**
 - Sortable by title, author, tags, pages, highlights, or date.
 - Search and tag filters in the toolbar.
-- Click any row to expand a detail panel with notes, highlights, and a progress tracker.
+- Click any row to expand a detail panel with notes, highlights, and a progress tracker. All fields are editable inline: title, author, tags, pages, URL, conversation URL, and notes.
 
 **Reading progress:**
 - In the detail panel, log how many pages you read on a given date.
@@ -112,6 +115,7 @@ Open from the popup footer or the Library page directly.
 
 **Browsing:**
 - Cards show title, page count, word count, highlight count, tags, and a content preview.
+- Double-click a card's title or author to rename it inline.
 - Search filters across title, author, tags, and body text.
 - Sort by date, title, page count, or word count.
 
@@ -122,6 +126,7 @@ Open from the popup footer or the Library page directly.
 **Reading PDFs:**
 - Click any card to open the built-in PDF reader with canvas rendering, text selection, lazy page loading, and scroll position memory.
 - Full highlighting and notes support (same as web pages, plus color options and in-PDF search).
+- Edit title and author from within the reader — click the pencil icon or press `E` to open the edit panel.
 
 ### Knowledge Graph
 
@@ -138,7 +143,8 @@ Configure in **Settings** (accessible from the popup footer or nav bar).
 **GitHub:**
 - Provide a Personal Access Token (fine-grained, Contents read/write), repo owner, repo name, and file path.
 - Each sync pushes a full JSON snapshot of all readings (with highlights and notes) to the repo.
-- Optional: per-reading `.md` files with YAML frontmatter (Obsidian-compatible) in a configurable directory.
+- Optional: per-reading `.md` files with YAML frontmatter (Obsidian-compatible) in a configurable directory. Files include reading log tables, highlights with inline LaTeX (`$...$`), and `[[wikilink]]` backlinks to related readings (shared tags).
+- **Bulk Obsidian export**: Dashboard → Export button generates a `.zip` containing `readings/`, `tags/`, and `index.md` — drop the contents into an Obsidian vault. Both the bulk export and per-reading GitHub sync use a shared markdown module (`lib/markdown-export.js`) for identical output.
 - **Restore from GitHub**: Pulls the JSON from the repo and merges missing readings into local storage.
 - **Restore from File**: Same merge from a local `.json` backup.
 
@@ -195,12 +201,13 @@ The sharing feature uses Supabase (Postgres + auth) as a backend. To set it up:
 | Key | Action |
 |---|---|
 | `H` | Toggle highlight mode |
+| `E` | Toggle title/author edit panel |
 | `Cmd/Ctrl+F` | Open in-document search |
 | `Cmd/Ctrl+ +` or `=` | Zoom in |
 | `Cmd/Ctrl+ -` | Zoom out |
 | `Cmd/Ctrl+0` | Reset zoom (150%) |
 | `Cmd/Ctrl+S` | Save notes |
-| `Escape` | Close search / exit highlight mode / dismiss popovers |
+| `Escape` | Close search / exit highlight mode / close edit panel / dismiss popovers |
 
 ### Web Pages
 | Key | Action |
@@ -250,9 +257,14 @@ options.html / .js     Settings: credentials, account, share management
 shared.html / .js      Viewer for shared library PDF annotations
 nav-sync.js            Sync button wired into nav bar on all pages
 lib/
+  markdown-export.js   Shared Obsidian markdown builder (slugify, frontmatter, highlights)
+  export.js            Bulk ZIP export (tag indexes, master index, packaging)
   supabase.js          Supabase client (auth + sharing, raw fetch)
   db.js                IndexedDB abstraction
   classify.js          Auto-classification keyword scoring
+  collab.js            Real-time collaborative annotations
+  readings-sync.js     Supabase readings sync (push/pull/merge)
+  pdf-sync.js          Supabase PDF sync
   pdf.min.mjs          PDF.js library
   marked.min.js        Markdown parser
   katex.min.js         LaTeX math rendering
