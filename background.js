@@ -199,6 +199,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.type === 'oc-toggle-star') {
+    getReadings().then(async readings => {
+      const r = readings[msg.pageKey];
+      if (!r) { sendResponse({ error: 'Not found' }); return; }
+      r.starred = !r.starred;
+      r.updatedAt = new Date().toISOString();
+      await saveReadings(readings);
+      sendResponse({ ok: true, starred: r.starred });
+    });
+    return true;
+  }
   if (msg.type === 'oc-resolve-conversation') {
     // Check if this URL is linked as a conversationUrl on any reading.
     // Matches if the stored conversationUrl is a prefix of (or equal to) the
@@ -361,7 +372,7 @@ async function estimatePages(tabId) {
 }
 
 // ── Upsert a reading entry ──────────────────────────────────────────
-async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content, conversationUrl }) {
+async function upsertReading({ pageKey, title, author, url, tags, notes, estPages, content, conversationUrl, starred }) {
   const readings = await getReadings();
   const now = new Date().toISOString();
   const existing = readings[pageKey];
@@ -383,6 +394,7 @@ async function upsertReading({ pageKey, title, author, url, tags, notes, estPage
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     conversationUrl: conversationUrl ?? existing?.conversationUrl ?? null,
+    starred: starred ?? existing?.starred ?? false,
     syncedAt: existing?.syncedAt ?? null,
     ...(existing?.readingLog ? { readingLog: existing.readingLog } : {})
   };
@@ -535,6 +547,7 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
         url: remote.url || pageKey, tags: remote.tags || [],
         notes: remote.notes || '', estPages: remote.estPages || 0,
         conversationUrl: remote.conversationUrl || null,
+        starred: remote.starred || false,
         createdAt: remote.createdAt || now, updatedAt: remote.updatedAt || now,
         syncedAt: remote.updatedAt || now,
         ...(remote.readingLog ? { readingLog: remote.readingLog } : {})
@@ -550,6 +563,7 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
         notes: remote.notes || local.notes,
         estPages: remote.estPages || local.estPages,
         conversationUrl: remote.conversationUrl || local.conversationUrl || null,
+        starred: remote.starred || local.starred || false,
         createdAt: remote.createdAt || local.createdAt,
         updatedAt: remote.updatedAt,
         syncedAt: remote.updatedAt,
@@ -1140,6 +1154,7 @@ async function syncReadings() {
         updatedAt: reading.updatedAt,
         highlights: allHighlights[key] || [],
         ...(reading.conversationUrl ? { conversationUrl: reading.conversationUrl } : {}),
+        ...(reading.starred ? { starred: reading.starred } : {}),
         ...(reading.readingLog ? { readingLog: reading.readingLog } : {})
       };
     }

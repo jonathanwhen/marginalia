@@ -206,7 +206,14 @@
     tbody tr.row td:first-child {
       border-left: 3px solid var(--row-accent, transparent);
     }
-    .col-title { width: 30%; color: #fff; font-weight: 500; }
+    .col-star { width: 3%; text-align: center; }
+    .star-btn {
+      background: none; border: none; cursor: pointer; font-size: 14px;
+      color: var(--text-4); padding: 2px; transition: color 0.15s;
+    }
+    .star-btn:hover { color: var(--accent); }
+    .star-btn.starred { color: var(--accent); }
+    .col-title { width: 27%; color: #fff; font-weight: 500; }
     .col-title .title-text {
       display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }

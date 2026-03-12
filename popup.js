@@ -145,6 +145,8 @@ async function autofill() {
     document.getElementById('note-input').value = reading.notes || '';
     document.getElementById('log-send').textContent = 'Update Reading';
     document.getElementById('auto-save-hint').style.display = 'block';
+    updateStarButton(reading.starred);
+
 
     // Backfill page estimate if missing
     if (!reading.estPages) {
@@ -180,6 +182,20 @@ async function autofill() {
 
   autofillDone = true;
 }
+
+// ── Star toggle ─────────────────────────────────────────────────────
+function updateStarButton(starred) {
+  const btn = document.getElementById('log-star-btn');
+  btn.innerHTML = starred ? '&#9733;' : '&#9734;';
+  btn.style.color = starred ? '#e8a87c' : '#333';
+  btn.dataset.starred = starred ? '1' : '0';
+}
+
+document.getElementById('log-star-btn').addEventListener('click', async () => {
+  if (!currentPageKey) return;
+  const result = await chrome.runtime.sendMessage({ type: 'oc-toggle-star', pageKey: currentPageKey });
+  if (result?.ok) updateStarButton(result.starred);
+});
 
 // ── Log / Update reading ────────────────────────────────────────────
 document.getElementById('log-send').addEventListener('click', async () => {

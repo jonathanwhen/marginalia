@@ -107,6 +107,7 @@ let sortAsc = false;
 let activeTag = null;
 
 const COLUMNS = [
+  { key: 'star',   label: '\u2605', cls: 'col-star' },
   { key: 'title',  label: 'Title',  cls: 'col-title' },
   { key: 'author', label: 'Author', cls: 'col-author' },
   { key: 'tags',   label: 'Tags',   cls: 'col-tags' },
@@ -499,7 +500,9 @@ function renderTable(readings) {
       ? `<div class="row-progress"><div class="row-progress-fill" style="width:${Math.round(r.progress * 100)}%"></div></div>`
       : '';
 
+    const starCls = r.starred ? 'star-btn starred' : 'star-btn';
     html += `<tr class="row" data-pk="${esc(r.pageKey)}" style="--row-accent:${color}">
+      <td class="col-star"><button class="${starCls}" data-pk="${esc(r.pageKey)}" title="Star">${r.starred ? '\u2605' : '\u2606'}</button></td>
       <td class="col-title" title="${esc(r.title)}"><span class="title-text">${titlePrefix}${esc(r.title || '(untitled)')}</span>${progressHtml}</td>
       <td class="col-author">${esc(r.author || '\u2014')}</td>
       <td class="col-tags">${tagsHtml || '<span style="color:var(--text-4)">\u2014</span>'}</td>
@@ -549,6 +552,21 @@ function renderTable(readings) {
     });
   });
 
+  // Star buttons
+  wrap.querySelectorAll('.star-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const pk = btn.dataset.pk;
+      const result = await chrome.runtime.sendMessage({ type: 'oc-toggle-star', pageKey: pk });
+      if (result?.ok) {
+        // Update local state and re-render
+        const r = allReadings.find(r => r.pageKey === pk);
+        if (r) r.starred = result.starred;
+        renderTable(getFilteredReadings());
+      }
+    });
+  });
+
   // Row expand
   wrap.querySelectorAll('tr.row').forEach(tr => {
     tr.addEventListener('click', () => {
@@ -565,8 +583,15 @@ function sortReadings(readings) {
   const dir = sortAsc ? 1 : -1;
 
   copy.sort((a, b) => {
+    // Starred readings always float to the top (unless sorting by star column)
+    if (sortCol !== 'star') {
+      if (a.starred && !b.starred) return -1;
+      if (!a.starred && b.starred) return 1;
+    }
+
     let va, vb;
     switch (sortCol) {
+      case 'star':   va = a.starred ? 1 : 0; vb = b.starred ? 1 : 0; break;
       case 'title':  va = (a.title || '').toLowerCase(); vb = (b.title || '').toLowerCase(); break;
       case 'author': va = (a.author || '').toLowerCase(); vb = (b.author || '').toLowerCase(); break;
       case 'tags':   va = (a.tags || []).join(',').toLowerCase(); vb = (b.tags || []).join(',').toLowerCase(); break;
