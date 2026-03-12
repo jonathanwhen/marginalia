@@ -628,20 +628,22 @@ async function toggleDetail(tr, detailTr, reading) {
   const highlights = Array.isArray(hlResult[reading.pageKey]) ? hlResult[reading.pageKey] : [];
   const container = detailTr.querySelector('.detail-content');
 
-  // Left column: metadata + notes
+  // Left column: editable metadata + notes
   let metaHtml = `<div><h4 class="detail-section-title">Details</h4><div class="detail-meta">`;
-  metaHtml += `<div class="meta-row"><span class="meta-label">Title</span><span class="meta-value">${esc(reading.title || '')}</span></div>`;
-  if (reading.author) metaHtml += `<div class="meta-row"><span class="meta-label">Author</span><span class="meta-value">${esc(reading.author)}</span></div>`;
-  if (reading.tags?.length) metaHtml += `<div class="meta-row"><span class="meta-label">Tags</span><span class="meta-value">${reading.tags.map(t => esc(t)).join(', ')}</span></div>`;
-  if (reading.estPages) metaHtml += `<div class="meta-row"><span class="meta-label">Pages</span><span class="meta-value">${reading.estPages}</span></div>`;
-  if (reading.url) metaHtml += `<div class="meta-row"><span class="meta-label">URL</span><span class="meta-value"><a href="${esc(reading.url)}" target="_blank" rel="noopener">${esc(reading.url)}</a></span></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Title</span><input class="meta-edit" data-field="title" value="${esc(reading.title || '')}" /></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Author</span><input class="meta-edit" data-field="author" value="${esc(reading.author || '')}" /></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Tags</span><input class="meta-edit" data-field="tags" value="${esc((reading.tags || []).join(', '))}" placeholder="Comma-separated" /></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Pages</span><input class="meta-edit" data-field="estPages" type="number" min="0" value="${reading.estPages || ''}" /></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">URL</span><input class="meta-edit" data-field="url" value="${esc(reading.url || '')}" /></div>`;
+  metaHtml += `<div class="meta-row"><span class="meta-label">Conv. URL</span><input class="meta-edit" data-field="conversationUrl" value="${esc(reading.conversationUrl || '')}" placeholder="https://claude.ai/chat/..." /></div>`;
   metaHtml += `<div class="meta-row"><span class="meta-label">Logged</span><span class="meta-value">${esc(formatDateFull(reading.createdAt))}</span></div>`;
   if (reading.updatedAt !== reading.createdAt) {
     metaHtml += `<div class="meta-row"><span class="meta-label">Updated</span><span class="meta-value">${esc(formatDateFull(reading.updatedAt))}</span></div>`;
   }
   metaHtml += '</div>';
-  if (reading.conversationUrl) metaHtml += `<a class="detail-conv-link" href="${esc(reading.conversationUrl)}" target="_blank" rel="noopener">💬 Claude conversation</a>`;
-  if (reading.notes) metaHtml += `<div class="detail-notes">${renderMarkdownWithMath(reading.notes)}</div>`;
+  metaHtml += `<div class="meta-row" style="margin-top:6px;"><span class="meta-label">Notes</span></div>`;
+  metaHtml += `<textarea class="meta-edit meta-notes-edit" data-field="notes" rows="4" placeholder="Key takeaways...">${esc(reading.notes || '')}</textarea>`;
+  metaHtml += `<button class="detail-save-btn" style="margin-top:8px;background:#e8a87c;color:#0a0a0a;border:none;border-radius:5px;padding:7px 18px;font-size:12px;font-weight:600;cursor:pointer;">Save Changes</button>`;
   metaHtml += '</div>';
 
   // Right column: highlights
@@ -730,6 +732,43 @@ async function toggleDetail(tr, detailTr, reading) {
     }
     await deleteReading(reading.pageKey);
   });
+
+  // Save edits
+  const saveBtn = container.querySelector('.detail-save-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const fields = {};
+      container.querySelectorAll('.meta-edit').forEach(input => {
+        const f = input.dataset.field;
+        if (f === 'tags') {
+          fields[f] = input.value.split(',').map(t => t.trim()).filter(Boolean);
+        } else if (f === 'estPages') {
+          fields[f] = parseInt(input.value, 10) || 0;
+        } else {
+          fields[f] = input.value.trim();
+        }
+      });
+      await chrome.runtime.sendMessage({
+        type: 'oc-upsert-reading',
+        pageKey: reading.pageKey,
+        title: fields.title || reading.title,
+        author: fields.author ?? reading.author,
+        url: fields.url || reading.url,
+        tags: fields.tags || reading.tags,
+        notes: fields.notes ?? reading.notes,
+        conversationUrl: fields.conversationUrl || null,
+        estPages: fields.estPages || reading.estPages
+      });
+      saveBtn.textContent = 'Saved!';
+      setTimeout(() => { saveBtn.textContent = 'Save Changes'; }, 1500);
+      await loadReadings();
+      const newTr = document.querySelector(`tr.row[data-pk="${CSS.escape(reading.pageKey)}"]`);
+      const newDetailTr = document.querySelector(`tr.detail-row[data-detail-pk="${CSS.escape(reading.pageKey)}"]`);
+      const updated = allReadings.find(r => r.pageKey === reading.pageKey);
+      if (newTr && newDetailTr && updated) toggleDetail(newTr, newDetailTr, updated);
+    });
+  }
 
   // Reading progress: log button
   const rpLogBtn = container.querySelector('.rp-log-btn');

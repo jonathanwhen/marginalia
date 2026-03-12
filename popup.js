@@ -145,6 +145,7 @@ async function autofill() {
     document.getElementById('note-input').value = reading.notes || '';
     document.getElementById('log-send').textContent = 'Update Reading';
     document.getElementById('auto-save-hint').style.display = 'block';
+    document.getElementById('log-unlog-btn').style.display = 'block';
     updateStarButton(reading.starred);
 
 
@@ -233,6 +234,38 @@ document.getElementById('log-send').addEventListener('click', async () => {
     }
   } catch (e) {
     showToast(`Error: ${e.message}`, 'error');
+  }
+  await updatePendingCount();
+  await updateTodayPages();
+});
+
+// ── Unlog reading ────────────────────────────────────────────────
+const unlogBtn = document.getElementById('log-unlog-btn');
+let unlogConfirm = false;
+unlogBtn.addEventListener('click', async () => {
+  if (!currentPageKey) return;
+  if (!unlogConfirm) {
+    unlogBtn.textContent = 'Click again to confirm';
+    unlogBtn.style.borderColor = '#eb5757';
+    unlogBtn.style.color = '#eb5757';
+    unlogConfirm = true;
+    setTimeout(() => {
+      unlogBtn.textContent = 'Unlog Reading';
+      unlogBtn.style.borderColor = '#333';
+      unlogBtn.style.color = '#888';
+      unlogConfirm = false;
+    }, 3000);
+    return;
+  }
+  const result = await chrome.runtime.sendMessage({ type: 'oc-delete-reading', pageKey: currentPageKey });
+  if (result?.ok) {
+    showToast('Reading removed');
+    document.getElementById('log-send').textContent = 'Log Reading';
+    document.getElementById('auto-save-hint').style.display = 'none';
+    unlogBtn.style.display = 'none';
+    unlogConfirm = false;
+  } else {
+    showToast('Failed to remove', 'error');
   }
   await updatePendingCount();
   await updateTodayPages();

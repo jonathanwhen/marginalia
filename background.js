@@ -210,6 +210,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.type === 'oc-delete-reading') {
+    getReadings().then(async readings => {
+      if (!readings[msg.pageKey]) { sendResponse({ error: 'Not found' }); return; }
+      delete readings[msg.pageKey];
+      await saveReadings(readings);
+      await chrome.storage.local.remove(msg.pageKey); // remove highlights
+      scheduleSyncSoon();
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
   if (msg.type === 'oc-resolve-conversation') {
     // Check if this URL is linked as a conversationUrl on any reading.
     // Matches if the stored conversationUrl is a prefix of (or equal to) the

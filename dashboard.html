@@ -272,6 +272,18 @@
     .detail-meta .meta-row { display: flex; gap: 8px; }
     .detail-meta .meta-label { color: var(--text-3); flex-shrink: 0; min-width: 60px; }
     .detail-meta .meta-value { color: var(--text); }
+    .meta-edit {
+      flex: 1; background: var(--card); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text); font-size: 12px; padding: 4px 7px;
+      outline: none; font-family: inherit; transition: border 0.15s;
+    }
+    .meta-edit:focus { border-color: var(--accent); }
+    .meta-notes-edit {
+      width: 100%; resize: vertical; min-height: 60px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+      font-size: 12px; padding: 6px 8px; outline: none; font-family: inherit;
+    }
+    .meta-notes-edit:focus { border-color: var(--accent); }
     .detail-meta a { color: var(--accent); text-decoration: none; word-break: break-all; }
     .detail-meta a:hover { text-decoration: underline; }
     .detail-notes {
