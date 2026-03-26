@@ -766,11 +766,25 @@ document.getElementById('log-claude-btn').addEventListener('click', async () => 
   const title = document.getElementById('log-title').value.trim() || 'Untitled';
   const author = document.getElementById('log-author').value.trim();
 
-  // Build the prompt with paper context
+  // Extract page text from the active tab
+  let pageText = '';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+      const result = await chrome.tabs.sendMessage(tab.id, { type: 'oc-get-page-text' });
+      if (result?.text) pageText = result.text;
+    }
+  } catch (e) {}
+
+  // Build the prompt with paper context + page content
   const { claudeDiscussionPrompt } = await chrome.storage.local.get('claudeDiscussionPrompt');
   const template = claudeDiscussionPrompt || DEFAULT_PAPER_PROMPT;
   const header = author ? `Paper: "${title}" by ${author}` : `Paper: "${title}"`;
-  const fullPrompt = `${header}\n\n${template}`;
+  let fullPrompt = `${header}\n\n${template}`;
+  if (pageText) {
+    fullPrompt += `\n\n---\n\nHere is the paper:\n\n${pageText}`;
+  }
 
   try {
     await navigator.clipboard.writeText(fullPrompt);
@@ -785,7 +799,7 @@ document.getElementById('log-claude-btn').addEventListener('click', async () => 
     pageKey: currentPageKey
   });
 
-  showToast('Prompt copied — paste in Claude');
+  showToast('Prompt + paper copied — paste in Claude');
 });
 
 // ── Init ──────────────────────────────────────────────────────────

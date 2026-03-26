@@ -116,10 +116,20 @@ Throughout, explicitly call out:
 
 My goal is to finish with strong intuitions I can actually use, fluency with the technical vocabulary so future papers in this area become progressively easier to read on my own, and a handful of durable mental models worth carrying forward.`;
 
+  // Load PDF transcript text from IndexedDB
+  let pageText = '';
+  try {
+    const transcript = await getTranscript(currentPageKey);
+    if (transcript?.content) pageText = transcript.content.slice(0, 100000);
+  } catch (e) {}
+
   const { claudeDiscussionPrompt } = await chrome.storage.local.get('claudeDiscussionPrompt');
   const template = claudeDiscussionPrompt || DEFAULT_PAPER_PROMPT;
   const header = currentAuthor ? `Paper: "${currentTitle}" by ${currentAuthor}` : `Paper: "${currentTitle}"`;
-  const fullPrompt = `${header}\n\n${template}`;
+  let fullPrompt = `${header}\n\n${template}`;
+  if (pageText) {
+    fullPrompt += `\n\n---\n\nHere is the paper:\n\n${pageText}`;
+  }
 
   try {
     await navigator.clipboard.writeText(fullPrompt);
@@ -133,7 +143,7 @@ My goal is to finish with strong intuitions I can actually use, fluency with the
     pageKey: currentPageKey
   });
 
-  showToast('Prompt copied — paste in Claude');
+  showToast('Prompt + paper copied — paste in Claude');
 });
 
 // Color picker

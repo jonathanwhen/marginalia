@@ -527,6 +527,15 @@
       sendResponse({ wordCount: isPdf ? 0 : getArticleWordCount() });
       return;
     }
+    if (msg.type === 'oc-get-page-text') {
+      const el = document.querySelector('article')
+        || document.querySelector('[role="main"]')
+        || document.body;
+      const text = (el.innerText || el.textContent || '').trim();
+      // Cap at ~100k chars to avoid clipboard/memory issues
+      sendResponse({ text: text.slice(0, 100000) });
+      return;
+    }
     if (msg.type === 'oc-delete-highlight') {
       document.querySelectorAll(`mark[data-oc-id="${msg.id}"]`).forEach(mark => {
         const parent = mark.parentNode;

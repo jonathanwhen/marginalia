@@ -775,7 +775,30 @@ My goal is to finish with strong intuitions I can actually use, fluency with the
       const title = reading.title || 'Untitled';
       const author = reading.author || '';
       const header = author ? `Paper: "${title}" by ${author}` : `Paper: "${title}"`;
-      const fullPrompt = `${header}\n\n${template}`;
+      let fullPrompt = `${header}\n\n${template}`;
+
+      // Try to get page text: from open tab (web) or highlights/notes as fallback
+      let pageText = '';
+      try {
+        // For web readings, try to extract text from an open tab with the same URL
+        if (reading.url && !reading.pageKey.startsWith('library:')) {
+          const tabs = await chrome.tabs.query({ url: reading.url });
+          if (tabs.length) {
+            await chrome.scripting.executeScript({ target: { tabId: tabs[0].id }, files: ['content.js'] });
+            const result = await chrome.tabs.sendMessage(tabs[0].id, { type: 'oc-get-page-text' });
+            if (result?.text) pageText = result.text;
+          }
+        }
+      } catch (e) {}
+
+      if (pageText) {
+        fullPrompt += `\n\n---\n\nHere is the paper:\n\n${pageText}`;
+      } else if (highlights.length) {
+        // Fall back to highlights + notes as context
+        const hlText = highlights.map(h => `> ${h.text}${h.comment ? '\n(' + h.comment + ')' : ''}`).join('\n\n');
+        fullPrompt += `\n\n---\n\nI don't have the full paper text available, but here are my highlights and notes:\n\n${hlText}`;
+        if (reading.notes) fullPrompt += `\n\nNotes:\n${reading.notes}`;
+      }
 
       try {
         await navigator.clipboard.writeText(fullPrompt);
