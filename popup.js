@@ -31,6 +31,28 @@ document.getElementById('open-graph').addEventListener('click', e => {
   chrome.tabs.create({ url: chrome.runtime.getURL('graph.html') });
 });
 
+// ── Default paper discussion prompt ───────────────────────────────
+const DEFAULT_PAPER_PROMPT = `I'm going to share an ML/AI paper with you. Your job is not to summarize it — it's to teach it to me in a way that builds genuine intuition and lasting mental models.
+
+Start with a 3-5 sentence high-level orientation: what question the paper is trying to answer, why it matters, and the core finding in plain language. Don't try to cover everything here — just enough to orient me before we dive in.
+
+Then, before diving in, read the full paper and decide how to chunk it into teaching sections. These don't have to match the paper's section headers — group or split however makes the most pedagogical sense for building understanding progressively. State explicitly how many sections you've settled on and list them out like a table of contents, so I know the shape of what we're walking through.
+
+Then walk me through each section in order. For each one:
+- Frame it as a continuation of the story: what question or gap is this section addressing given what we just covered?
+- Explain the key ideas, findings, or methods in plain language first, then introduce any technical terms precisely — define them clearly when they first appear, and connect them to the intuition rather than leading with them
+- Use analogies only when they genuinely clarify something that would otherwise be abstract — don't force them
+- Flag the 1-3 things in this section I should actually hold onto as durable mental models vs. implementation details I can forget
+
+After each section, pause and ask if I have questions or want to go deeper on anything before moving on. Don't proceed until I say so.
+
+Throughout, explicitly call out:
+- Results or findings that generalize beyond this paper — things that could reshape how I think about adjacent problems
+- Anything that connects to or updates a prior established result in the field
+- Any design choice, framing, or insight that's elegant or non-obvious in a way worth remembering
+
+My goal is to finish with strong intuitions I can actually use, fluency with the technical vocabulary so future papers in this area become progressively easier to read on my own, and a handful of durable mental models worth carrying forward.`;
+
 // ── Tag selection ─────────────────────────────────────────────────
 function setupTags(containerId) {
   document.querySelectorAll(`#${containerId} .tag-btn`).forEach(btn => {
@@ -735,6 +757,35 @@ document.getElementById('collab-join-btn')?.addEventListener('click', async () =
 
   btn.textContent = 'Join';
   btn.disabled = false;
+});
+
+// ── Discuss with Claude ───────────────────────────────────────────
+document.getElementById('log-claude-btn').addEventListener('click', async () => {
+  if (!currentPageKey) { showToast('No page context', 'error'); return; }
+
+  const title = document.getElementById('log-title').value.trim() || 'Untitled';
+  const author = document.getElementById('log-author').value.trim();
+
+  // Build the prompt with paper context
+  const { claudeDiscussionPrompt } = await chrome.storage.local.get('claudeDiscussionPrompt');
+  const template = claudeDiscussionPrompt || DEFAULT_PAPER_PROMPT;
+  const header = author ? `Paper: "${title}" by ${author}` : `Paper: "${title}"`;
+  const fullPrompt = `${header}\n\n${template}`;
+
+  try {
+    await navigator.clipboard.writeText(fullPrompt);
+  } catch (e) {
+    showToast('Failed to copy prompt', 'error');
+    return;
+  }
+
+  // Tell background to open Claude and set up auto-linking
+  await chrome.runtime.sendMessage({
+    type: 'oc-open-claude-discussion',
+    pageKey: currentPageKey
+  });
+
+  showToast('Prompt copied — paste in Claude');
 });
 
 // ── Init ──────────────────────────────────────────────────────────

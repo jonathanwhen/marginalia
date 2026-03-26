@@ -10,7 +10,7 @@
     .field { margin-bottom: 18px; }
     label { display: block; font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
     input { width: 100%; background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; color: #e0e0e0; font-size: 13px; padding: 10px 12px; outline: none; }
-    input:focus { border-color: #e8a87c; }
+    input:focus, textarea:focus { border-color: #e8a87c; }
     button { background: #e8a87c; color: #0a0a0a; border: none; border-radius: 6px; padding: 10px 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
     .saved { color: #6fcf97; font-size: 12px; margin-left: 12px; display: none; }
     .hint { font-size: 11px; color: #444; margin-top: 4px; }
@@ -147,6 +147,14 @@
   <div class="field" style="display:flex; align-items:center; gap:8px;">
     <input type="checkbox" id="autoExtract" style="width:auto;" />
     <label style="margin-bottom:0; text-transform:none; color:#e0e0e0; font-size:12px;">Auto-extract concepts on sync</label>
+  </div>
+
+  <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Claude Discussion</h2>
+
+  <div class="field">
+    <label>Paper Learning Prompt</label>
+    <textarea id="claudeDiscussionPrompt" rows="6" style="width:100%; background:#161616; border:1px solid #2a2a2a; border-radius:6px; color:#e0e0e0; font-size:12px; padding:10px 12px; outline:none; resize:vertical; font-family:inherit; line-height:1.5;" placeholder="Your prompt template for discussing papers with Claude..."></textarea>
+    <div class="hint">Used by "Discuss with Claude" button. Paper title/author is prepended automatically. Leave empty for default.</div>
   </div>
 
   <h2 style="font-size:14px; margin: 24px 0 16px; color: #e8a87c;">Auto-Sync</h2>

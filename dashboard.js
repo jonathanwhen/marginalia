@@ -669,6 +669,7 @@ async function toggleDetail(tr, detailTr, reading) {
   hlHtml += '</div>';
 
   const deleteBtnHtml = `<button class="delete-btn" data-pk="${esc(reading.pageKey)}" style="background:rgba(235,87,87,0.12);border:1px solid rgba(235,87,87,0.4);border-radius:5px;color:#eb5757;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;">Delete Reading</button>`;
+  const claudeBtnHtml = `<button class="claude-btn" data-pk="${esc(reading.pageKey)}" style="background:rgba(123,104,238,0.12);border:1px solid rgba(123,104,238,0.4);border-radius:5px;color:#7b68ee;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;">Discuss with Claude</button>`;
   const isLibraryItem = reading.pageKey.startsWith('library:');
   const openReaderBtnHtml = isLibraryItem
     ? `<a href="${chrome.runtime.getURL('library-reader.html?key=' + encodeURIComponent(reading.pageKey))}" target="_blank" style="background:rgba(111,207,151,0.12);border:1px solid rgba(111,207,151,0.4);border-radius:5px;color:#6fcf97;font-size:12px;padding:8px 18px;cursor:pointer;font-weight:600;text-decoration:none;display:inline-block;">Open in Reader</a>`
@@ -716,7 +717,7 @@ async function toggleDetail(tr, detailTr, reading) {
   progressHtml += '</div>';
 
   container.innerHTML = `<div class="detail-panel">
-    <div style="display:flex;justify-content:flex-start;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #1e1e1e;">${openReaderBtnHtml}${deleteBtnHtml}</div>
+    <div style="display:flex;justify-content:flex-start;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #1e1e1e;">${openReaderBtnHtml}${claudeBtnHtml}${deleteBtnHtml}</div>
     ${progressHtml}
     <div class="detail-grid">${metaHtml}${hlHtml}</div>
   </div>`;
@@ -741,6 +742,53 @@ async function toggleDetail(tr, detailTr, reading) {
     }
     await deleteReading(reading.pageKey);
   });
+
+  // Discuss with Claude
+  const claudeBtn = container.querySelector('.claude-btn');
+  if (claudeBtn) {
+    claudeBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+
+      const DEFAULT_PAPER_PROMPT = `I'm going to share an ML/AI paper with you. Your job is not to summarize it — it's to teach it to me in a way that builds genuine intuition and lasting mental models.
+
+Start with a 3-5 sentence high-level orientation: what question the paper is trying to answer, why it matters, and the core finding in plain language. Don't try to cover everything here — just enough to orient me before we dive in.
+
+Then, before diving in, read the full paper and decide how to chunk it into teaching sections. These don't have to match the paper's section headers — group or split however makes the most pedagogical sense for building understanding progressively. State explicitly how many sections you've settled on and list them out like a table of contents, so I know the shape of what we're walking through.
+
+Then walk me through each section in order. For each one:
+- Frame it as a continuation of the story: what question or gap is this section addressing given what we just covered?
+- Explain the key ideas, findings, or methods in plain language first, then introduce any technical terms precisely — define them clearly when they first appear, and connect them to the intuition rather than leading with them
+- Use analogies only when they genuinely clarify something that would otherwise be abstract — don't force them
+- Flag the 1-3 things in this section I should actually hold onto as durable mental models vs. implementation details I can forget
+
+After each section, pause and ask if I have questions or want to go deeper on anything before moving on. Don't proceed until I say so.
+
+Throughout, explicitly call out:
+- Results or findings that generalize beyond this paper — things that could reshape how I think about adjacent problems
+- Anything that connects to or updates a prior established result in the field
+- Any design choice, framing, or insight that's elegant or non-obvious in a way worth remembering
+
+My goal is to finish with strong intuitions I can actually use, fluency with the technical vocabulary so future papers in this area become progressively easier to read on my own, and a handful of durable mental models worth carrying forward.`;
+
+      const { claudeDiscussionPrompt } = await chrome.storage.local.get('claudeDiscussionPrompt');
+      const template = claudeDiscussionPrompt || DEFAULT_PAPER_PROMPT;
+      const title = reading.title || 'Untitled';
+      const author = reading.author || '';
+      const header = author ? `Paper: "${title}" by ${author}` : `Paper: "${title}"`;
+      const fullPrompt = `${header}\n\n${template}`;
+
+      try {
+        await navigator.clipboard.writeText(fullPrompt);
+      } catch (err) {
+        return;
+      }
+
+      await chrome.runtime.sendMessage({
+        type: 'oc-open-claude-discussion',
+        pageKey: reading.pageKey
+      });
+    });
+  }
 
   // Save edits
   const saveBtn = container.querySelector('.detail-save-btn');

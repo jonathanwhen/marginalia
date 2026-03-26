@@ -155,8 +155,9 @@ chrome.storage.sync.get(
     if (autoExtract) document.getElementById('autoExtract').checked = autoExtract;
   }
 );
-chrome.storage.local.get('ocFlushIntervalMinutes', ({ ocFlushIntervalMinutes }) => {
+chrome.storage.local.get(['ocFlushIntervalMinutes', 'claudeDiscussionPrompt'], ({ ocFlushIntervalMinutes, claudeDiscussionPrompt }) => {
   if (ocFlushIntervalMinutes) document.getElementById('flushInterval').value = ocFlushIntervalMinutes;
+  if (claudeDiscussionPrompt) document.getElementById('claudeDiscussionPrompt').value = claudeDiscussionPrompt;
 });
 
 document.getElementById('save').addEventListener('click', () => {
@@ -170,9 +171,16 @@ document.getElementById('save').addEventListener('click', () => {
   const claudeApiKey = document.getElementById('claudeApiKey').value.trim();
   const autoExtract = document.getElementById('autoExtract').checked;
   const flushInterval = parseInt(document.getElementById('flushInterval').value, 10) || 60;
+  const claudeDiscussionPrompt = document.getElementById('claudeDiscussionPrompt').value.trim();
 
   chrome.storage.sync.set({ botToken, chatId, ghToken, ghOwner, ghRepo, ghPath, ghNotesDir, claudeApiKey, autoExtract });
-  chrome.storage.local.set({ ocFlushIntervalMinutes: flushInterval }, () => {
+  const localSettings = { ocFlushIntervalMinutes: flushInterval };
+  if (claudeDiscussionPrompt) {
+    localSettings.claudeDiscussionPrompt = claudeDiscussionPrompt;
+  } else {
+    chrome.storage.local.remove('claudeDiscussionPrompt');
+  }
+  chrome.storage.local.set(localSettings, () => {
     // Tell background to reconfigure the alarm with the new interval
     chrome.runtime.sendMessage({ type: 'oc-reset-alarm', intervalMinutes: flushInterval });
 

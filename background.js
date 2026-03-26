@@ -50,6 +50,38 @@ setupFlushAlarm();
 setupDailySummaryAlarm();
 updateBadge();
 
+// ── Auto-link Claude conversations ──────────────────────────────────
+// When user opens a Claude discussion from a reading, we watch for the
+// SPA navigation from /new to /chat/{uuid} and auto-set the conversationUrl.
+chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  const url = details.url;
+  // Match claude.ai/chat/{uuid} but not /chat/new or /chat (no ID)
+  if (!/^https:\/\/claude\.ai\/chat\/[a-f0-9-]{36}/.test(url)) return;
+
+  const { pendingConversationLink } = await chrome.storage.local.get('pendingConversationLink');
+  if (!pendingConversationLink) return;
+
+  // Expire pending links older than 10 minutes
+  if (Date.now() - pendingConversationLink.ts > 10 * 60 * 1000) {
+    await chrome.storage.local.remove('pendingConversationLink');
+    return;
+  }
+
+  // Link this conversation URL to the reading
+  const readings = await getReadings();
+  const reading = readings[pendingConversationLink.pageKey];
+  if (reading) {
+    await upsertReading({
+      pageKey: pendingConversationLink.pageKey,
+      conversationUrl: url
+    });
+  }
+
+  // Clear the pending link
+  await chrome.storage.local.remove('pendingConversationLink');
+});
+
 // ── ArXiv PDF auto-intercept → open in built-in reader ──────────────
 // Disabled: text layer quality needs improvement before auto-redirecting
 // chrome.webNavigation.onBeforeNavigate.addListener((details) => {
@@ -238,6 +270,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       sendResponse(null);
     });
+    return true;
+  }
+  if (msg.type === 'oc-open-claude-discussion') {
+    (async () => {
+      // Store pending link so webNavigation can auto-link the conversation
+      await chrome.storage.local.set({ pendingConversationLink: { pageKey: msg.pageKey, ts: Date.now() } });
+      // Open Claude in a new tab
+      await chrome.tabs.create({ url: 'https://claude.ai/new' });
+      sendResponse({ ok: true });
+    })();
     return true;
   }
   if (msg.type === 'oc-highlight-changed') {
