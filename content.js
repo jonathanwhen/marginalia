@@ -42,6 +42,20 @@
     } catch (e) {}
   }
   resolvePageKey();
+
+  // SPA navigation detection: re-resolve pageKey when URL changes (e.g. claude.ai)
+  let _lastHref = location.href;
+  function checkUrlChange() {
+    if (location.href !== _lastHref) {
+      _lastHref = location.href;
+      _resolvedPageKey = null;
+      _linkedReadingTitle = null;
+      resolvePageKey();
+    }
+  }
+  // pushState/replaceState don't fire events, so poll + listen for popstate
+  setInterval(checkUrlChange, 1000);
+  window.addEventListener('popstate', checkUrlChange);
   const isPdf = document.contentType === 'application/pdf' || location.pathname.toLowerCase().endsWith('.pdf');
 
   // ── HTML escaping ──────────────────────────────────────────────────
