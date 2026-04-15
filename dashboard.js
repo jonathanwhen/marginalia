@@ -651,11 +651,14 @@ async function toggleDetail(tr, detailTr, reading) {
   metaHtml += `<button class="detail-save-btn" style="margin-top:8px;background:#e8a87c;color:#0a0a0a;border:none;border-radius:5px;padding:7px 18px;font-size:12px;font-weight:600;cursor:pointer;">Save Changes</button>`;
   metaHtml += '</div>';
 
-  // Right column: highlights
-  let hlHtml = `<div><h4 class="detail-section-title">Highlights (${highlights.length})</h4>`;
-  if (highlights.length) {
+  // Right column: highlights — split article vs conversation
+  const articleHl = highlights.filter(h => h.source !== 'conversation');
+  const convHl = highlights.filter(h => h.source === 'conversation');
+
+  let hlHtml = `<div><h4 class="detail-section-title">Highlights (${articleHl.length})</h4>`;
+  if (articleHl.length) {
     hlHtml += '<ul class="detail-hl-list">';
-    for (const h of highlights) {
+    for (const h of articleHl) {
       hlHtml += '<li class="detail-hl-item">';
       hlHtml += `<div class="detail-hl-quote">"${esc(h.text)}"</div>`;
       if (h.latex) hlHtml += `<div class="detail-hl-latex">${renderLatex(h.latex)}</div>`;
@@ -665,6 +668,24 @@ async function toggleDetail(tr, detailTr, reading) {
     hlHtml += '</ul>';
   } else {
     hlHtml += '<div class="detail-hl-empty">No highlights for this reading.</div>';
+  }
+
+  // Conversation annotations section
+  hlHtml += `<h4 class="detail-section-title" style="margin-top:20px;">Conversation Annotations (${convHl.length})</h4>`;
+  if (convHl.length) {
+    hlHtml += '<ul class="detail-hl-list">';
+    for (const h of convHl) {
+      hlHtml += '<li class="detail-hl-item detail-hl-conv">';
+      hlHtml += `<div class="detail-hl-quote">"${esc(h.text)}"</div>`;
+      if (h.latex) hlHtml += `<div class="detail-hl-latex">${renderLatex(h.latex)}</div>`;
+      if (h.comment) hlHtml += `<div class="detail-hl-comment">${renderMathInText(h.comment)}</div>`;
+      hlHtml += '</li>';
+    }
+    hlHtml += '</ul>';
+  } else if (reading.conversationUrl) {
+    hlHtml += '<div class="detail-hl-empty">No annotations yet — highlight text in your Claude conversation.</div>';
+  } else {
+    hlHtml += '<div class="detail-hl-empty">No Claude conversation linked.</div>';
   }
   hlHtml += '</div>';
 

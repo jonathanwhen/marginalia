@@ -418,11 +418,12 @@
   // opts.shared: if true, uses shared highlight styling (read-only, blue).
   function wrapRange(range, h, opts) {
     const shared = opts?.shared;
+    const isConv = h.source === 'conversation';
     try {
       const mark = document.createElement('mark');
       mark.className = shared
         ? 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '')
-        : 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+        : (isConv ? 'oc-highlight-conv' : 'oc-highlight') + (h.comment ? ' oc-highlight-comment' : '');
       mark.dataset.ocId = h.id;
       if (!shared) mark.title = h.comment || '';
       range.surroundContents(mark);
@@ -439,6 +440,7 @@
 
   function wrapRangeMulti(range, h, opts) {
     const shared = opts?.shared;
+    const isConv = h.source === 'conversation';
     const textNodes = [];
     const walker = document.createTreeWalker(
       range.commonAncestorContainer,
@@ -464,7 +466,7 @@
       const mark = document.createElement('mark');
       mark.className = shared
         ? 'oc-highlight-shared' + (h.comment ? ' oc-highlight-shared-comment' : '')
-        : 'oc-highlight' + (h.comment ? ' oc-highlight-comment' : '');
+        : (isConv ? 'oc-highlight-conv' : 'oc-highlight') + (h.comment ? ' oc-highlight-comment' : '');
       mark.dataset.ocId = h.id;
       if (!shared) mark.title = h.comment || '';
       target.parentNode.insertBefore(mark, target);
@@ -596,7 +598,8 @@
   // ── Update a highlight's comment in storage + DOM ──────────────
   function updateHighlightComment(id, comment, mark, h) {
     h.comment = comment;
-    mark.className = 'oc-highlight' + (comment ? ' oc-highlight-comment' : '');
+    const baseClass = h.source === 'conversation' ? 'oc-highlight-conv' : 'oc-highlight';
+    mark.className = baseClass + (comment ? ' oc-highlight-comment' : '');
     mark.title = comment;
     getHighlights(highlights => {
       const existing = highlights.find(hl => hl.id === id);
@@ -844,6 +847,7 @@
       text,
       comment,
       timestamp: new Date().toISOString(),
+      ...(_resolvedPageKey ? { source: 'conversation' } : {}),
       ...(anchor ? { anchor } : {}),
       ...(mathData?.latex ? { latex: mathData.latex } : {}),
       ...(mathData?.mathElements ? { mathElements: mathData.mathElements } : {})

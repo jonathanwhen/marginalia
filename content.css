@@ -64,6 +64,22 @@
   border-bottom: 1.5px solid rgba(111, 207, 151, 0.8);
 }
 
+/* Conversation highlights (from linked Claude discussions) */
+.oc-highlight-conv {
+  background: rgba(123, 104, 238, 0.25);
+  border-bottom: 1.5px solid rgba(123, 104, 238, 0.7);
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.oc-highlight-conv:hover {
+  background: rgba(123, 104, 238, 0.45);
+}
+.oc-highlight-conv.oc-highlight-comment {
+  background: rgba(123, 104, 238, 0.3);
+  border-bottom: 1.5px solid rgba(123, 104, 238, 0.8);
+}
+
 #oc-toolbar {
   position: absolute;
   z-index: 2147483647;
