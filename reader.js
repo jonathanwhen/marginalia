@@ -379,7 +379,20 @@ async function loadHighlights() {
         h && typeof h.id === 'string' && typeof h.text === 'string' &&
         typeof h.pageIndex === 'number'
       );
-      if (highlights.length < stored.length) {
+      // Sanitize bogus offsets (see library-reader.js for context).
+      let mutated = false;
+      for (const h of highlights) {
+        if (h.startOffset !== undefined && h.endOffset !== undefined) {
+          const range = h.endOffset - h.startOffset;
+          const textLen = h.text?.length || 0;
+          if (range > Math.max(50, textLen * 2 + 20)) {
+            h.startOffset = undefined;
+            h.endOffset = undefined;
+            mutated = true;
+          }
+        }
+      }
+      if (highlights.length < stored.length || mutated) {
         await chrome.storage.local.set({ [currentPageKey]: highlights });
       }
     } else {
@@ -640,10 +653,15 @@ viewerContainer.addEventListener('mouseup', e => {
     if (!pc) { hideHlToolbar(); return; }
 
     const spans = getTopLevelTextElements(pc.textLayer);
-    const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
+    const offsets = computeSelectionOffsets(sel, spans);
 
     const selRect = sel.getRangeAt(0).getBoundingClientRect();
-    pendingHighlight = { text, pageIndex, startOffset, endOffset, selRect };
+    pendingHighlight = {
+      text, pageIndex,
+      startOffset: offsets?.startOffset,
+      endOffset: offsets?.endOffset,
+      selRect,
+    };
 
     hlToolbar.style.left = Math.max(8, selRect.left + selRect.width / 2 - 80) + 'px';
     hlToolbar.style.top = Math.max(8, selRect.top - 40) + 'px';
@@ -677,14 +695,16 @@ function computeSelectionOffsets(sel, spans) {
     }
   }
 
-  let startOffset = 0, endOffset = 0;
   const anchorOff = nodeOffsets.get(sel.anchorNode);
   const focusOff = nodeOffsets.get(sel.focusNode);
 
-  if (anchorOff !== undefined) startOffset = anchorOff + sel.anchorOffset;
-  if (focusOff !== undefined) endOffset = focusOff + sel.focusOffset;
+  // Return null when either endpoint is unmapped so the caller falls back to
+  // text-search-by-content; a half-mapped range used to produce
+  // (start=0, end=large), which highlighted from page start.
+  if (anchorOff === undefined || focusOff === undefined) return null;
 
-  // Ensure start < end
+  let startOffset = anchorOff + sel.anchorOffset;
+  let endOffset = focusOff + sel.focusOffset;
   if (startOffset > endOffset) [startOffset, endOffset] = [endOffset, startOffset];
 
   return { startOffset, endOffset };

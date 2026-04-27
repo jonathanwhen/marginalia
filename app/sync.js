@@ -1,10 +1,49 @@
 /**
  * Sync logic for Electron — ported from background.js.
  * Uses the storage module instead of chrome.storage.
+ *
+ * Reading/highlight sync to Supabase delegates to the extension's
+ * lib/readings-sync.js so the Chrome extension and Electron app always
+ * agree on the wire format and merge semantics. Single source of truth.
  */
 
 const storage = require('./storage');
 const libraryStorage = require('./library-storage');
+const path = require('path');
+const { pathToFileURL } = require('url');
+
+// Lazy-load ESM modules from the extension's lib/ directory. Caching the
+// loaded modules avoids re-import overhead on every sync tick.
+const _libCache = {};
+async function loadExtModule(relPath) {
+  if (_libCache[relPath]) return _libCache[relPath];
+  const { app } = require('electron');
+  const extRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'ext')
+    : path.resolve(__dirname, '..');
+  const fileUrl = pathToFileURL(path.join(extRoot, relPath)).href;
+  _libCache[relPath] = await import(fileUrl);
+  return _libCache[relPath];
+}
+const getReadingsSyncLib = () => loadExtModule('lib/readings-sync.js');
+const getPdfSyncLib       = () => loadExtModule('lib/pdf-sync.js');
+
+// Extract highlight arrays from the full local-storage section. Mirrors
+// extractHighlightsFromStorage in lib/readings-sync.js so the same
+// "anything that's an Array under a non-reserved key" rule applies.
+function extractHighlightsFromLocal(localSection) {
+  const skip = new Set([
+    'ocReadings', 'ocGitHubSha', 'ocMarkdownShas',
+    'ocSupabaseSession', 'ocLastSyncResult'
+  ]);
+  const out = {};
+  for (const [key, val] of Object.entries(localSection)) {
+    if (!skip.has(key) && !key.startsWith('pos:') && Array.isArray(val)) {
+      out[key] = val;
+    }
+  }
+  return out;
+}
 
 // ── Supabase config (PDF sync) ───────────────────────────────────────
 const SUPABASE_URL = 'https://lfvbrrxnjwanbniaegnf.supabase.co';
@@ -147,17 +186,25 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
     const local = localReadings[pageKey];
 
     if (!local) {
+      // New reading from remote — adopt it. Preserve every field the
+      // extension may have written (conversationUrl, starred, mediaType,
+      // duration) so cross-device sync doesn't lose data.
       const now = new Date().toISOString();
       localReadings[pageKey] = {
         title: remote.title || '', author: remote.author || '',
         url: remote.url || pageKey, tags: remote.tags || [],
         notes: remote.notes || '', estPages: remote.estPages || 0,
+        conversationUrl: remote.conversationUrl ?? null,
+        starred: remote.starred ?? false,
+        ...(remote.mediaType !== undefined ? { mediaType: remote.mediaType } : {}),
+        ...(remote.duration !== undefined ? { duration: remote.duration } : {}),
         createdAt: remote.createdAt || now, updatedAt: remote.updatedAt || now,
         syncedAt: remote.updatedAt || now,
         ...(remote.readingLog ? { readingLog: remote.readingLog } : {})
       };
       merged++;
     } else if (remote.updatedAt && remote.updatedAt > (local.updatedAt || '')) {
+      // Remote is newer — adopt remote fields, fall back to local where missing.
       localReadings[pageKey] = {
         title: remote.title || local.title,
         author: remote.author || local.author,
@@ -165,6 +212,12 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
         tags: remote.tags || local.tags,
         notes: remote.notes || local.notes,
         estPages: remote.estPages || local.estPages,
+        conversationUrl: remote.conversationUrl ?? local.conversationUrl ?? null,
+        starred: remote.starred ?? local.starred ?? false,
+        ...(remote.mediaType !== undefined || local.mediaType !== undefined
+          ? { mediaType: remote.mediaType ?? local.mediaType } : {}),
+        ...(remote.duration !== undefined || local.duration !== undefined
+          ? { duration: remote.duration ?? local.duration } : {}),
         createdAt: remote.createdAt || local.createdAt,
         updatedAt: remote.updatedAt,
         syncedAt: remote.updatedAt,
@@ -175,14 +228,24 @@ async function mergeFromRemote(ghToken, ghOwner, ghRepo, ghPath) {
       merged++;
     }
 
-    // Merge highlights by ID (union)
+    // Merge highlights by ID (union); remote wins on duplicate IDs only when
+    // remote has a later timestamp, matching lib/readings-sync.js semantics.
     if (remote.highlights?.length) {
       const localHls = storage.get('local', [pageKey])[pageKey] || [];
-      const localIds = new Set(localHls.map(h => h.id));
-      const newHls = remote.highlights.filter(h => !localIds.has(h.id));
-      if (newHls.length > 0) {
-        storage.set('local', { [pageKey]: [...localHls, ...newHls] });
+      const byId = new Map();
+      for (const h of localHls) byId.set(h.id || h.text, h);
+      let mutated = false;
+      for (const r of remote.highlights) {
+        const id = r.id || r.text;
+        const existing = byId.get(id);
+        if (!existing) { byId.set(id, r); mutated = true; }
+        else {
+          const localTime = existing.timestamp || existing.createdAt || '';
+          const remoteTime = r.timestamp || r.createdAt || '';
+          if (remoteTime > localTime) { byId.set(id, r); mutated = true; }
+        }
       }
+      if (mutated) storage.set('local', { [pageKey]: Array.from(byId.values()) });
     }
   }
 
@@ -426,22 +489,24 @@ async function getSupabaseAuth() {
 }
 
 // ── Library PDF sync via Supabase ────────────────────────────────────
+// Delegates to lib/pdf-sync.js so list/upload/download wire formats stay
+// aligned with the Chrome extension.
 async function syncLibraryPdfs() {
   const auth = await getSupabaseAuth();
   if (!auth) return null;
-
   const { token, userId } = auth;
-  const sbHeaders = { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${token}` };
 
-  // List remote PDFs
-  const listRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/library_pdfs?user_id=eq.${userId}&select=page_key,file_hash,byte_size,title,author,file_name,page_count,word_count,tags,storage_path,uploaded_at`,
-    { headers: sbHeaders }
-  );
-  if (!listRes.ok) return null;
-  const remotePdfs = await listRes.json();
+  const pdfSync = await getPdfSyncLib();
+
+  let remotePdfs;
+  try {
+    remotePdfs = await pdfSync.listRemotePdfs(token, userId);
+  } catch (e) {
+    console.error('listRemotePdfs failed:', e);
+    return null;
+  }
+
   const remoteByKey = new Map(remotePdfs.map(p => [p.page_key, p]));
-
   const localMeta = libraryStorage.getAllTranscriptsMeta();
   const localKeys = new Set(localMeta.map(t => t.pageKey));
 
@@ -453,30 +518,13 @@ async function syncLibraryPdfs() {
     try {
       const transcript = libraryStorage.getTranscript(meta.pageKey);
       if (!transcript?.pdfData) continue;
-      const storagePath = `${userId}/${meta.fileHash}-${meta.byteSize}.pdf`;
-
-      const upRes = await fetch(`${SUPABASE_URL}/storage/v1/object/library/${storagePath}`, {
-        method: 'POST',
-        headers: { ...sbHeaders, 'Content-Type': 'application/pdf', 'x-upsert': 'true' },
-        body: Buffer.from(transcript.pdfData)
+      await pdfSync.uploadPdf(token, userId, {
+        pageKey: meta.pageKey, fileHash: meta.fileHash, byteSize: meta.byteSize,
+        title: meta.title, author: meta.author, fileName: meta.fileName,
+        pageCount: meta.pageCount, wordCount: meta.wordCount, tags: meta.tags,
+        // Buffer wraps the Uint8Array (zero-copy); Node's fetch accepts it as body.
+        pdfData: Buffer.from(transcript.pdfData)
       });
-      if (!upRes.ok) continue;
-
-      const metaRes = await fetch(`${SUPABASE_URL}/rest/v1/library_pdfs`, {
-        method: 'POST',
-        headers: { ...sbHeaders, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' },
-        body: JSON.stringify({
-          user_id: userId, page_key: meta.pageKey, file_hash: meta.fileHash || '',
-          byte_size: meta.byteSize || 0, title: meta.title || '', author: meta.author || '',
-          file_name: meta.fileName || '', page_count: meta.pageCount || 0,
-          word_count: meta.wordCount || 0, tags: meta.tags || [],
-          storage_path: storagePath, updated_at: new Date().toISOString()
-        })
-      });
-      if (!metaRes.ok) {
-        console.error(`PDF metadata upsert failed for ${meta.pageKey}: ${metaRes.status}`);
-        continue;
-      }
       uploaded++;
     } catch (e) {
       console.error(`PDF upload failed for ${meta.pageKey}:`, e);
@@ -487,23 +535,17 @@ async function syncLibraryPdfs() {
   for (const remote of remotePdfs) {
     if (localKeys.has(remote.page_key)) continue;
     try {
-      const dlRes = await fetch(`${SUPABASE_URL}/storage/v1/object/library/${remote.storage_path}`, {
-        headers: sbHeaders
-      });
-      if (!dlRes.ok) continue;
-      const pdfData = await dlRes.arrayBuffer();
-
+      const buf = await pdfSync.downloadPdf(token, remote.storage_path);
       libraryStorage.putTranscript({
         pageKey: remote.page_key, title: remote.title || '', author: remote.author || '',
-        pdfData: new Uint8Array(pdfData), content: '',
+        pdfData: new Uint8Array(buf), content: '',
         fileName: remote.file_name || '', fileHash: remote.file_hash || '',
         byteSize: remote.byte_size || 0, pageCount: remote.page_count || 0,
         wordCount: remote.word_count || 0, tags: remote.tags || [],
         importedAt: remote.uploaded_at || new Date().toISOString(),
         format: 'pdf'
       });
-
-      // Create reading entry
+      // Create reading entry so it shows on the dashboard.
       upsertReading({
         pageKey: remote.page_key, title: remote.title || '',
         author: remote.author || '', url: remote.page_key,
@@ -534,99 +576,35 @@ function scheduleSyncSoon() {
 }
 
 // ── Supabase readings/highlights sync ────────────────────────────────
-// Pushes local readings & highlights to Supabase, then pulls remote
-// changes. Uses last-write-wins by updatedAt/timestamp.
-
+// Delegates entirely to lib/readings-sync.js (the extension's module) so
+// wire format and merge semantics are guaranteed identical between the
+// Chrome extension and the Electron app. Behavior:
+//   1. Pull remote → merge with local (LWW for readings, union-by-ID
+//      with timestamp tiebreaker for highlights).
+//   2. Persist merged state.
+//   3. Push only readings whose updatedAt > syncedAt.
 async function syncReadingsToSupabase(token, userId, readings) {
-  const sbHeaders = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${token}`,
-    'apikey': SUPABASE_ANON_KEY,
-    'Prefer': 'resolution=merge-duplicates'
-  };
-  const sbReadHeaders = {
-    'Authorization': `Bearer ${token}`,
-    'apikey': SUPABASE_ANON_KEY
-  };
+  const lib = await getReadingsSyncLib();
+  const localSection = storage.get('local'); // full section, not a single key
 
-  // Push readings that have been updated
-  for (const [pageKey, reading] of Object.entries(readings)) {
-    if (!reading.updatedAt) continue;
+  const remote = await lib.pullReadings(token, userId);
 
-    await fetch(`${SUPABASE_URL}/rest/v1/synced_readings`, {
-      method: 'POST',
-      headers: sbHeaders,
-      body: JSON.stringify({
-        user_id: userId,
-        page_key: pageKey,
-        data: reading,
-        updated_at: reading.updatedAt
-      })
-    });
-
-    // Push highlights for this page
-    const hlData = storage.get('local', [pageKey]);
-    const highlights = hlData[pageKey];
-    if (Array.isArray(highlights) && highlights.length > 0) {
-      await fetch(`${SUPABASE_URL}/rest/v1/synced_highlights`, {
-        method: 'POST',
-        headers: sbHeaders,
-        body: JSON.stringify({
-          user_id: userId,
-          page_key: pageKey,
-          highlights: highlights,
-          updated_at: new Date().toISOString()
-        })
-      });
-    }
-  }
-
-  // Pull remote readings — merge by last-write-wins on updatedAt
-  const readRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/synced_readings?user_id=eq.${userId}`,
-    { headers: sbReadHeaders }
+  const merged = await lib.mergeReadings(
+    { readings, highlights: extractHighlightsFromLocal(localSection) },
+    remote
   );
-  if (readRes.ok) {
-    const remote = await readRes.json();
-    for (const row of remote) {
-      const local = readings[row.page_key];
-      if (!local || (row.data.updatedAt && (!local.updatedAt || row.data.updatedAt > local.updatedAt))) {
-        readings[row.page_key] = row.data;
-      }
-    }
+
+  if (merged.changed) {
+    Object.assign(readings, merged.readings);
     saveReadings(readings);
-  }
-
-  // Pull remote highlights — merge by ID with timestamp-based wins
-  const hlRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/synced_highlights?user_id=eq.${userId}`,
-    { headers: sbReadHeaders }
-  );
-  if (hlRes.ok) {
-    const remoteHl = await hlRes.json();
-    for (const row of remoteHl) {
-      const localHlData = storage.get('local', [row.page_key]);
-      const local = localHlData[row.page_key];
-      if (!local || !Array.isArray(local)) {
-        storage.set('local', { [row.page_key]: row.highlights });
-      } else {
-        const merged = mergeHighlightArrays(local, row.highlights);
-        storage.set('local', { [row.page_key]: merged });
-      }
+    for (const [pageKey, hl] of Object.entries(merged.highlights)) {
+      storage.set('local', { [pageKey]: hl });
     }
   }
-}
 
-function mergeHighlightArrays(localArr, remoteArr) {
-  const byId = new Map();
-  for (const h of localArr) byId.set(h.id, h);
-  for (const h of remoteArr) {
-    const existing = byId.get(h.id);
-    if (!existing || (h.timestamp && (!existing.timestamp || h.timestamp > existing.timestamp))) {
-      byId.set(h.id, h);
-    }
-  }
-  return [...byId.values()];
+  // Re-read after merge so the push sees the freshly-merged state.
+  const freshLocal = merged.changed ? storage.get('local') : localSection;
+  await lib.pushReadings(token, userId, readings, freshLocal);
 }
 
 // ── Message router ───────────────────────────────────────────────────

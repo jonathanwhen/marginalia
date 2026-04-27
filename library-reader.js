@@ -469,8 +469,27 @@ async function loadHighlights() {
       highlights = [];
     }
 
-    if (highlights.length < before) {
+    // Sanitize stored offsets: if the offset range is much larger than the
+    // highlight's text length (a strong signal of the "highlighted entire page"
+    // bug), drop the offsets and let the apply path recover via text search.
+    let mutated = false;
+    for (const h of highlights) {
+      if (h.startOffset !== undefined && h.endOffset !== undefined) {
+        const range = h.endOffset - h.startOffset;
+        const textLen = h.text?.length || 0;
+        // Allow up to 2x text length for soft-hyphen / line-break expansion;
+        // anything beyond that is corruption.
+        if (range > Math.max(50, textLen * 2 + 20)) {
+          h.startOffset = undefined;
+          h.endOffset = undefined;
+          mutated = true;
+        }
+      }
+    }
+
+    if (highlights.length < before || mutated) {
       await chrome.storage.local.set({ [currentPageKey]: highlights });
+      if (mutated) console.warn('[Marginalia] Sanitized stored offsets for some highlights');
     }
 
     if (highlights.length) {
@@ -509,18 +528,26 @@ function applyHighlightsToPage(pageIndex) {
   // Compute total text length on this page to validate highlight offsets
   const totalTextLen = spans.reduce((sum, s) => sum + s.textContent.length, 0);
 
+  let mutated = false;
   for (const h of pageHighlights) {
-    // Skip highlights with suspiciously broad offsets (>80% of page text)
-    // These are almost certainly bad data from mis-positioned text layer
+    // Highlights with suspiciously broad offsets (>80% of page text) are
+    // almost always corrupted state — strip the offsets and fall back to
+    // text-search-by-content. Don't drop the highlight; the user's
+    // h.text is reliable.
+    let toApply = h;
     if (h.startOffset !== undefined && h.endOffset !== undefined) {
       const hlLen = h.endOffset - h.startOffset;
       if (hlLen > totalTextLen * 0.8) {
-        console.warn(`[Marginalia] Skipping bad highlight: covers ${hlLen}/${totalTextLen} chars on page ${pageIndex}`);
-        continue;
+        console.warn(`[Marginalia] Bogus offsets on page ${pageIndex} (${hlLen}/${totalTextLen}) — using text-search fallback`);
+        toApply = { ...h, startOffset: undefined, endOffset: undefined };
+        h.startOffset = undefined;
+        h.endOffset = undefined;
+        mutated = true;
       }
     }
-    applyHighlightToTextLayer(spans, h);
+    applyHighlightToTextLayer(spans, toApply);
   }
+  if (mutated) saveHighlightsToStorage();
 }
 
 // Apply a single new highlight to an already-rendered page without re-rendering.
@@ -530,8 +557,26 @@ function applyHighlightIncremental(pageIndex, h) {
   if (!pc || !pc.rendered) return false;
   const spans = getTopLevelTextElements(pc.textLayer);
   if (!spans.length) return false;
+
+  // Defense in depth: if the offset range is suspiciously broad (more than
+  // 80% of the page text), don't trust the offsets — fall back to
+  // text-search-by-content so we highlight just the user's actual selection.
+  const totalTextLen = spans.reduce((sum, s) => sum + s.textContent.length, 0);
+  let toApply = h;
+  if (h.startOffset !== undefined && h.endOffset !== undefined) {
+    const hlLen = h.endOffset - h.startOffset;
+    if (hlLen > totalTextLen * 0.8) {
+      console.warn(`[Marginalia] Bogus offsets (${hlLen}/${totalTextLen}) — falling back to text search`);
+      toApply = { ...h, startOffset: undefined, endOffset: undefined };
+      // Also strip from stored copy so reload doesn't repeat the bogus apply.
+      h.startOffset = undefined;
+      h.endOffset = undefined;
+      saveHighlightsToStorage();
+    }
+  }
+
   const before = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
-  applyHighlightToTextLayer(spans, h);
+  applyHighlightToTextLayer(spans, toApply);
   const after = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
   return after > before;
 }
@@ -737,11 +782,18 @@ viewerContainer.addEventListener('mouseup', e => {
 
     // Use the shared helper so offsets agree with highlight application.
     const spans = getTopLevelTextElements(pc.textLayer);
-    const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
+    const offsets = computeSelectionOffsets(sel, spans);
 
     // Capture rect now — selection may be cleared before popup positions itself.
     const selRect = sel.getRangeAt(0).getBoundingClientRect();
-    pendingHighlight = { text, pageIndex, startOffset, endOffset, selRect };
+    // If offsets failed (returned null), leave them undefined so the apply
+    // path falls back to text-search-by-content using h.text.
+    pendingHighlight = {
+      text, pageIndex,
+      startOffset: offsets?.startOffset,
+      endOffset: offsets?.endOffset,
+      selRect,
+    };
 
     if (highlightMode) {
       const h = createHighlight(pendingHighlight, '');
@@ -773,13 +825,19 @@ function computeSelectionOffsets(sel, spans) {
     }
   }
 
-  let startOffset = 0, endOffset = 0;
   const anchorOff = nodeOffsets.get(sel.anchorNode);
   const focusOff = nodeOffsets.get(sel.focusNode);
 
-  if (anchorOff !== undefined) startOffset = anchorOff + sel.anchorOffset;
-  if (focusOff !== undefined) endOffset = focusOff + sel.focusOffset;
+  // If either endpoint isn't in the page's known text nodes (e.g. selection
+  // crosses into a <br> or an element we don't track), return null so the
+  // caller falls back to text-search-by-content. Returning a half-mapped
+  // range previously produced startOffset=0, endOffset=large, which
+  // highlighted from page start to the selection — the "highlights the
+  // entire page" bug.
+  if (anchorOff === undefined || focusOff === undefined) return null;
 
+  let startOffset = anchorOff + sel.anchorOffset;
+  let endOffset = focusOff + sel.focusOffset;
   if (startOffset > endOffset) [startOffset, endOffset] = [endOffset, startOffset];
 
   return { startOffset, endOffset };
