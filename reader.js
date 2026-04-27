@@ -397,6 +397,13 @@ async function saveHighlightsToStorage() {
   } catch {}
 }
 
+// Top-level text elements in the layer that contribute to the page's
+// flat text string. Used by both selection-offset computation AND highlight
+// application so the indexing matches.
+function getTopLevelTextElements(textLayer) {
+  return Array.from(textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
+}
+
 // ── Highlight application on rendered pages ─────────────────────────
 function applyHighlightsToPage(pageIndex) {
   const pc = pageContainers[pageIndex];
@@ -405,7 +412,7 @@ function applyHighlightsToPage(pageIndex) {
   const pageHighlights = highlights.filter(h => h.pageIndex === pageIndex);
   if (!pageHighlights.length) return;
 
-  const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)'));
+  const spans = getTopLevelTextElements(pc.textLayer);
   if (!spans.length) return;
 
   const totalTextLen = spans.reduce((sum, s) => sum + s.textContent.length, 0);
@@ -422,9 +429,20 @@ function applyHighlightsToPage(pageIndex) {
   }
 }
 
+// Apply a single new highlight to an already-rendered page without re-rendering.
+function applyHighlightIncremental(pageIndex, h) {
+  const pc = pageContainers[pageIndex];
+  if (!pc || !pc.rendered) return false;
+  const spans = getTopLevelTextElements(pc.textLayer);
+  if (!spans.length) return false;
+  const before = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
+  applyHighlightToTextLayer(spans, h);
+  const after = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
+  return after > before;
+}
+
 function applyHighlightToTextLayer(allSpans, h) {
-  // Primary: offset-based matching
-  if (h.startOffset !== undefined && h.endOffset !== undefined) {
+  if (h.startOffset !== undefined && h.endOffset !== undefined && h.endOffset > h.startOffset) {
     const result = findSpansByOffset(allSpans, h.startOffset, h.endOffset);
     if (result.length > 0) {
       wrapSpansAsHighlight(result, h);
@@ -432,13 +450,44 @@ function applyHighlightToTextLayer(allSpans, h) {
     }
   }
 
-  // Fallback: text search within the text layer
   const allText = allSpans.map(s => s.textContent).join('');
   const searchText = h.text;
-  const idx = allText.indexOf(searchText);
-  if (idx === -1) return;
+  if (!searchText) return;
 
-  const result = findSpansByOffset(allSpans, idx, idx + searchText.length);
+  let idx = allText.indexOf(searchText);
+  let matchLen = searchText.length;
+
+  if (idx === -1) {
+    const normSearch = searchText.replace(/\s+/g, ' ').trim();
+    if (normSearch) {
+      const orig = allText;
+      let collapsed = '';
+      const map = [];
+      let prevWs = false;
+      for (let i = 0; i < orig.length; i++) {
+        const ch = orig[i];
+        const isWs = /\s/.test(ch);
+        if (isWs) {
+          if (!prevWs && collapsed.length > 0) { collapsed += ' '; map.push(i); }
+          prevWs = true;
+        } else {
+          collapsed += ch;
+          map.push(i);
+          prevWs = false;
+        }
+      }
+      const cIdx = collapsed.indexOf(normSearch);
+      if (cIdx !== -1) {
+        idx = map[cIdx];
+        const endC = cIdx + normSearch.length - 1;
+        const origEnd = (map[endC] ?? idx + matchLen) + 1;
+        matchLen = origEnd - idx;
+      }
+    }
+  }
+
+  if (idx === -1) return;
+  const result = findSpansByOffset(allSpans, idx, idx + matchLen);
   if (result.length > 0) {
     wrapSpansAsHighlight(result, h);
   }
@@ -456,7 +505,7 @@ function findSpansByOffset(spans, startOffset, endOffset) {
 
     const s = Math.max(0, startOffset - pos);
     const e = Math.min(len, endOffset - pos);
-    results.push({ span, start: s, end: e });
+    if (e > s) results.push({ span, start: s, end: e });
     pos = spanEnd;
   }
   return results;
@@ -590,19 +639,14 @@ viewerContainer.addEventListener('mouseup', e => {
     const pc = pageContainers[pageIndex];
     if (!pc) { hideHlToolbar(); return; }
 
-    // Compute offsets within this page's text layer
-    // :scope > matches only direct children of textLayer, avoiding double-counting
-    // text inside inline marks (which are nested inside spans, not siblings)
-    const spans = Array.from(pc.textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
+    const spans = getTopLevelTextElements(pc.textLayer);
     const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
 
-    pendingHighlight = { text, pageIndex, startOffset, endOffset };
+    const selRect = sel.getRangeAt(0).getBoundingClientRect();
+    pendingHighlight = { text, pageIndex, startOffset, endOffset, selRect };
 
-    // Position toolbar near selection
-    const range = sel.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    hlToolbar.style.left = Math.max(8, rect.left + rect.width / 2 - 80) + 'px';
-    hlToolbar.style.top = Math.max(8, rect.top - 40) + 'px';
+    hlToolbar.style.left = Math.max(8, selRect.left + selRect.width / 2 - 80) + 'px';
+    hlToolbar.style.top = Math.max(8, selRect.top - 40) + 'px';
     hlToolbar.classList.remove('hidden');
   }, 10);
 });
@@ -658,16 +702,16 @@ document.getElementById('hl-btn-highlight').addEventListener('click', e => {
 document.getElementById('hl-btn-comment').addEventListener('click', e => {
   e.stopPropagation();
   if (!pendingHighlight) return;
+  const rect = pendingHighlight.selRect;
   const h = createHighlight(pendingHighlight, '');
   hideHlToolbar();
   window.getSelection()?.removeAllRanges();
-  if (h) showAnnotationPopup(h);
+  if (h) showAnnotationPopup(h, rect);
 });
 
 function createHighlight(pending, comment) {
-  // Attempt LaTeX reconstruction from text layer spans
   const pc = pageContainers[pending.pageIndex];
-  const spans = pc ? Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)')) : [];
+  const spans = pc ? getTopLevelTextElements(pc.textLayer) : [];
   const latex = reconstructMathText(spans, pending.startOffset, pending.endOffset);
 
   const h = {
@@ -686,45 +730,45 @@ function createHighlight(pending, comment) {
   ensureReadingExists();
   notifyHighlightChanged('create', h.text, h.id);
 
-  // Re-render highlights on this page
-  reRenderPage(pending.pageIndex);
+  applyHighlightIncremental(pending.pageIndex, h);
   refreshSidebarHighlights();
 
   return h;
 }
 
-async function reRenderPage(pageIndex) {
+function unwrapHighlightMarks(id, pageIndex) {
   const pc = pageContainers[pageIndex];
   if (!pc) return;
-
-  // Cancel any in-progress render to avoid race conditions
-  if (pc.renderTask) {
-    try { pc.renderTask.cancel(); } catch {}
-    pc.renderTask = null;
+  const marks = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(id)}"]`);
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    if (parent.classList?.contains('textLayer')) {
+      const span = document.createElement('span');
+      span.textContent = mark.textContent;
+      for (const prop of ['left', 'top', 'fontSize', 'fontFamily', 'transform', 'transformOrigin', 'width']) {
+        if (mark.style[prop]) span.style[prop] = mark.style[prop];
+      }
+      parent.replaceChild(span, mark);
+    } else {
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    }
   }
-
-  // Wait for any rendering in progress to finish/cancel
-  // Reset state so renderPage can proceed
-  pc.rendered = false;
-  pc.rendering = false;
-  pc.textLayer.innerHTML = '';
-  pc.canvas.width = 0;
-  pc.canvas.height = 0;
-  await renderPage(pageIndex);
 }
 
 // ── Annotation popup ────────────────────────────────────────────────
-function showAnnotationPopup(h) {
-  // Find the first mark for this highlight to position near
+function showAnnotationPopup(h, fallbackRect) {
   const mark = document.querySelector(`mark[data-oc-id="${CSS.escape(h.id)}"]`);
-  if (!mark) return;
+  const rect = mark ? mark.getBoundingClientRect() : fallbackRect;
+  if (!rect) return;
 
-  const rect = mark.getBoundingClientRect();
-  annPopup.style.left = Math.max(8, rect.left) + 'px';
+  annPopup.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 290)) + 'px';
   annPopup.style.top = (rect.bottom + 4) + 'px';
   annPopup.classList.remove('hidden');
   annInput.value = '';
-  annInput.focus();
+  setTimeout(() => annInput.focus(), 0);
 
   annInput.onkeydown = e => {
     e.stopPropagation();
@@ -815,7 +859,9 @@ function updateHighlightComment(id, comment) {
   h.comment = comment;
   saveHighlightsToStorage();
   notifyHighlightChanged('update', h.text, h.id);
-  reRenderPage(h.pageIndex);
+
+  const marks = document.querySelectorAll(`mark[data-oc-id="${CSS.escape(id)}"]`);
+  for (const m of marks) m.classList.toggle('oc-highlight-comment', !!comment);
   refreshSidebarHighlights();
 }
 
@@ -825,7 +871,7 @@ function deleteHighlight(id) {
   highlights = highlights.filter(hl => hl.id !== id);
   saveHighlightsToStorage();
   notifyHighlightChanged('delete', '', id);
-  reRenderPage(h.pageIndex);
+  unwrapHighlightMarks(id, h.pageIndex);
   refreshSidebarHighlights();
 }
 

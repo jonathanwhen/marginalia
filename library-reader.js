@@ -90,7 +90,20 @@ document.getElementById('btn-highlight-mode').addEventListener('click', () => {
 });
 document.getElementById('banner-exit').addEventListener('click', exitHighlightMode);
 document.getElementById('btn-search').addEventListener('click', toggleSearch);
-document.getElementById('btn-export').addEventListener('click', exportHighlightsAsMarkdown);
+document.getElementById('btn-export').addEventListener('click', toggleExportMenu);
+// Wire each export menu item to its format
+document.querySelectorAll('#export-menu button').forEach(btn => {
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    copyAnnotations(btn.dataset.fmt);
+    hideExportMenu();
+  });
+});
+document.addEventListener('click', e => {
+  const menu = document.getElementById('export-menu');
+  const wrap = e.target.closest('.export-wrap');
+  if (!wrap && !menu.classList.contains('hidden')) hideExportMenu();
+});
 document.getElementById('btn-share').addEventListener('click', shareCurrentPage);
 document.getElementById('btn-claude').addEventListener('click', async () => {
   if (!currentPageKey) return;
@@ -475,6 +488,13 @@ async function saveHighlightsToStorage() {
   } catch {}
 }
 
+// Top-level text elements in the layer that contribute to the page's
+// flat text string. Used by both selection-offset computation AND highlight
+// application so the indexing matches.
+function getTopLevelTextElements(textLayer) {
+  return Array.from(textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
+}
+
 // ── Highlight application on rendered pages ──────────────────────────
 function applyHighlightsToPage(pageIndex) {
   const pc = pageContainers[pageIndex];
@@ -483,7 +503,7 @@ function applyHighlightsToPage(pageIndex) {
   const pageHighlights = highlights.filter(h => h.pageIndex === pageIndex);
   if (!pageHighlights.length) return;
 
-  const spans = Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)'));
+  const spans = getTopLevelTextElements(pc.textLayer);
   if (!spans.length) return;
 
   // Compute total text length on this page to validate highlight offsets
@@ -503,9 +523,22 @@ function applyHighlightsToPage(pageIndex) {
   }
 }
 
+// Apply a single new highlight to an already-rendered page without re-rendering.
+// Returns true if at least one mark was created.
+function applyHighlightIncremental(pageIndex, h) {
+  const pc = pageContainers[pageIndex];
+  if (!pc || !pc.rendered) return false;
+  const spans = getTopLevelTextElements(pc.textLayer);
+  if (!spans.length) return false;
+  const before = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
+  applyHighlightToTextLayer(spans, h);
+  const after = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(h.id)}"]`).length;
+  return after > before;
+}
+
 function applyHighlightToTextLayer(allSpans, h) {
-  // Primary: offset-based matching
-  if (h.startOffset !== undefined && h.endOffset !== undefined) {
+  // Primary: offset-based matching (only attempt if range is non-empty)
+  if (h.startOffset !== undefined && h.endOffset !== undefined && h.endOffset > h.startOffset) {
     const result = findSpansByOffset(allSpans, h.startOffset, h.endOffset);
     if (result.length > 0) {
       wrapSpansAsHighlight(result, h);
@@ -513,13 +546,49 @@ function applyHighlightToTextLayer(allSpans, h) {
     }
   }
 
-  // Fallback: text search (supports old highlight format without offsets)
+  // Fallback: text search (supports old highlight format without offsets, or
+  // when the text-layer was re-rendered with slightly different span boundaries
+  // — e.g. a tooltip or a different page-render pass).
   const allText = allSpans.map(s => s.textContent).join('');
   const searchText = h.text;
-  const idx = allText.indexOf(searchText);
-  if (idx === -1) return;
+  if (!searchText) return;
 
-  const result = findSpansByOffset(allSpans, idx, idx + searchText.length);
+  let idx = allText.indexOf(searchText);
+  let matchLen = searchText.length;
+
+  // If exact match fails, try whitespace-collapsed match.
+  if (idx === -1) {
+    const normSearch = searchText.replace(/\s+/g, ' ').trim();
+    if (normSearch) {
+      // Walk the text accumulating a collapsed view alongside original positions.
+      const orig = allText;
+      let collapsed = '';
+      const map = []; // collapsed-index -> original-index
+      let prevWs = false;
+      for (let i = 0; i < orig.length; i++) {
+        const ch = orig[i];
+        const isWs = /\s/.test(ch);
+        if (isWs) {
+          if (!prevWs && collapsed.length > 0) { collapsed += ' '; map.push(i); }
+          prevWs = true;
+        } else {
+          collapsed += ch;
+          map.push(i);
+          prevWs = false;
+        }
+      }
+      const cIdx = collapsed.indexOf(normSearch);
+      if (cIdx !== -1) {
+        idx = map[cIdx];
+        const endC = cIdx + normSearch.length - 1;
+        const origEnd = (map[endC] ?? idx + matchLen) + 1;
+        matchLen = origEnd - idx;
+      }
+    }
+  }
+
+  if (idx === -1) return;
+  const result = findSpansByOffset(allSpans, idx, idx + matchLen);
   if (result.length > 0) {
     wrapSpansAsHighlight(result, h);
   }
@@ -536,7 +605,7 @@ function findSpansByOffset(spans, startOffset, endOffset) {
 
     const s = Math.max(0, startOffset - pos);
     const e = Math.min(len, endOffset - pos);
-    results.push({ span, start: s, end: e });
+    if (e > s) results.push({ span, start: s, end: e });
     pos = spanEnd;
   }
   return results;
@@ -666,21 +735,21 @@ viewerContainer.addEventListener('mouseup', e => {
     const pc = pageContainers[pageIndex];
     if (!pc) { hideHlToolbar(); return; }
 
-    // :scope > matches only direct children of textLayer, avoiding double-counting
-    // text inside inline marks (which are nested inside spans, not siblings)
-    const spans = Array.from(pc.textLayer.querySelectorAll(':scope > span:not(.oc-highlight), :scope > mark'));
+    // Use the shared helper so offsets agree with highlight application.
+    const spans = getTopLevelTextElements(pc.textLayer);
     const { startOffset, endOffset } = computeSelectionOffsets(sel, spans);
 
-    pendingHighlight = { text, pageIndex, startOffset, endOffset };
+    // Capture rect now — selection may be cleared before popup positions itself.
+    const selRect = sel.getRangeAt(0).getBoundingClientRect();
+    pendingHighlight = { text, pageIndex, startOffset, endOffset, selRect };
 
     if (highlightMode) {
       const h = createHighlight(pendingHighlight, '');
       sel.removeAllRanges();
-      if (h) showAnnotationPopup(h);
+      if (h) showAnnotationPopup(h, selRect);
     } else {
-      const rect = sel.getRangeAt(0).getBoundingClientRect();
-      hlToolbar.style.left = Math.max(8, rect.left + rect.width / 2 - 80) + 'px';
-      hlToolbar.style.top = Math.max(8, rect.top - 40) + 'px';
+      hlToolbar.style.left = Math.max(8, selRect.left + selRect.width / 2 - 80) + 'px';
+      hlToolbar.style.top = Math.max(8, selRect.top - 40) + 'px';
       hlToolbar.classList.remove('hidden');
     }
   }, 10);
@@ -728,16 +797,18 @@ document.getElementById('hl-btn-highlight').addEventListener('click', e => {
 document.getElementById('hl-btn-comment').addEventListener('click', e => {
   e.stopPropagation();
   if (!pendingHighlight) return;
+  const rect = pendingHighlight.selRect;
   const h = createHighlight(pendingHighlight, '');
   hideHlToolbar();
   window.getSelection()?.removeAllRanges();
-  if (h) showAnnotationPopup(h);
+  if (h) showAnnotationPopup(h, rect);
 });
 
 function createHighlight(pending, comment) {
-  // Attempt LaTeX reconstruction from text layer spans
+  // Attempt LaTeX reconstruction from text layer spans (uses the same span
+  // ordering as selection-offset computation, so offsets line up).
   const pc = pageContainers[pending.pageIndex];
-  const spans = pc ? Array.from(pc.textLayer.querySelectorAll('span:not(.oc-highlight)')) : [];
+  const spans = pc ? getTopLevelTextElements(pc.textLayer) : [];
   const latex = reconstructMathText(spans, pending.startOffset, pending.endOffset);
 
   const h = {
@@ -757,40 +828,35 @@ function createHighlight(pending, comment) {
   ensureReadingExists();
   notifyHighlightChanged('create', h.text, h.id);
 
-  reRenderPage(pending.pageIndex);
+  // Apply directly to the live text layer instead of full re-rendering. This
+  // (1) avoids the race in reRenderPage that dropped highlights, and
+  // (2) ensures the <mark> exists synchronously so the comment popup can
+  //     position itself relative to it without flicker.
+  const applied = applyHighlightIncremental(pending.pageIndex, h);
+  if (!applied) {
+    showToast('Couldn’t apply highlight at that selection');
+  }
   refreshSidebarHighlights();
 
   return h;
 }
 
-async function reRenderPage(pageIndex) {
-  const pc = pageContainers[pageIndex];
-  if (!pc) return;
-
-  if (pc.renderTask) {
-    try { pc.renderTask.cancel(); } catch {}
-    pc.renderTask = null;
-  }
-
-  pc.rendered = false;
-  pc.rendering = false;
-  pc.textLayer.innerHTML = '';
-  pc.canvas.width = 0;
-  pc.canvas.height = 0;
-  await renderPage(pageIndex);
-}
-
 // ── Annotation popup ─────────────────────────────────────────────────
-function showAnnotationPopup(h) {
+// `fallbackRect` is the selection's bounding rect captured at mouseup.
+// We prefer the mark's rect when it's already in the DOM, but fall back to
+// the selection rect so the popup never silently fails to open.
+function showAnnotationPopup(h, fallbackRect) {
   const mark = document.querySelector(`mark[data-oc-id="${CSS.escape(h.id)}"]`);
-  if (!mark) return;
+  const rect = mark ? mark.getBoundingClientRect() : fallbackRect;
+  if (!rect) return;
 
-  const rect = mark.getBoundingClientRect();
-  annPopup.style.left = Math.max(8, rect.left) + 'px';
+  annPopup.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 290)) + 'px';
   annPopup.style.top = (rect.bottom + 4) + 'px';
   annPopup.classList.remove('hidden');
   annInput.value = '';
-  annInput.focus();
+  // Defer focus until after the current event loop so the click that opened
+  // the popup doesn't immediately blur the input on some browsers.
+  setTimeout(() => annInput.focus(), 0);
 
   annInput.onkeydown = e => {
     e.stopPropagation();
@@ -881,7 +947,12 @@ function updateHighlightComment(id, comment) {
   h.comment = comment;
   saveHighlightsToStorage();
   notifyHighlightChanged('update', h.text, h.id);
-  reRenderPage(h.pageIndex);
+
+  // Toggle the comment-indicator class on existing marks instead of full re-render.
+  const marks = document.querySelectorAll(`mark[data-oc-id="${CSS.escape(id)}"]`);
+  for (const m of marks) {
+    m.classList.toggle('oc-highlight-comment', !!comment);
+  }
   refreshSidebarHighlights();
 }
 
@@ -891,8 +962,38 @@ function deleteHighlight(id) {
   highlights = highlights.filter(hl => hl.id !== id);
   saveHighlightsToStorage();
   notifyHighlightChanged('delete', '', id);
-  reRenderPage(h.pageIndex);
+
+  // Remove marks in-place rather than full re-render. Top-level marks are
+  // unwrapped back to plain spans (preserving positioning); inline marks are
+  // unwrapped by lifting their text nodes into the parent span.
+  unwrapHighlightMarks(id, h.pageIndex);
   refreshSidebarHighlights();
+}
+
+function unwrapHighlightMarks(id, pageIndex) {
+  const pc = pageContainers[pageIndex];
+  if (!pc) return;
+  const marks = pc.textLayer.querySelectorAll(`mark[data-oc-id="${CSS.escape(id)}"]`);
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    if (parent.classList?.contains('textLayer')) {
+      // Top-level mark replaced a span. Restore it as a plain span so PDF.js
+      // text-layer behavior (selection, positioning) is intact.
+      const span = document.createElement('span');
+      span.textContent = mark.textContent;
+      // Copy positioning styles back
+      for (const prop of ['left', 'top', 'fontSize', 'fontFamily', 'transform', 'transformOrigin', 'width']) {
+        if (mark.style[prop]) span.style[prop] = mark.style[prop];
+      }
+      parent.replaceChild(span, mark);
+    } else {
+      // Inline mark inside a span — lift text nodes into the parent and remove the mark.
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    }
+  }
 }
 
 // ── Hide helpers ─────────────────────────────────────────────────────
@@ -989,8 +1090,182 @@ document.getElementById('sb-notes').addEventListener('keydown', e => {
     e.preventDefault();
     clearTimeout(sidebarSaveTimer);
     saveSidebarNote();
+    return;
+  }
+
+  // ⌘B / ⌘I — bold / italic shortcuts
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
+    e.preventDefault();
+    applyFormat(e.key === 'b' ? 'bold' : 'italic');
+    return;
+  }
+
+  // Tab / Shift+Tab — indent / outdent within bullets
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    handleTabIndent(e.shiftKey);
+    return;
+  }
+
+  // Enter — auto-continue list / blockquote
+  if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+    if (handleListEnter()) e.preventDefault();
   }
 });
+
+// ── Notes formatting helpers ─────────────────────────────────────────
+const sbNotes = document.getElementById('sb-notes');
+
+function fireNotesInput() {
+  // Trigger input listener so auto-save runs after programmatic edits
+  sbNotes.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function replaceSelection(textarea, before, after = '', placeholder = '') {
+  const { selectionStart: s, selectionEnd: e, value } = textarea;
+  const selected = value.slice(s, e) || placeholder;
+  const replacement = before + selected + after;
+  textarea.setRangeText(replacement, s, e, 'end');
+  // Place cursor: if no selection and we used placeholder, select the placeholder
+  if (s === e && placeholder) {
+    textarea.setSelectionRange(s + before.length, s + before.length + placeholder.length);
+  }
+  textarea.focus();
+  fireNotesInput();
+}
+
+// Toggle a per-line prefix on every line in the current selection (or current line).
+// If every line already has the prefix, strip it (toggle off). Otherwise, add it.
+function togglePrefix(textarea, prefix, isOrdered = false) {
+  const { selectionStart: s, selectionEnd: e, value } = textarea;
+  // Expand to whole-line range
+  const lineStart = value.lastIndexOf('\n', s - 1) + 1;
+  const lineEndIdx = value.indexOf('\n', e);
+  const lineEnd = lineEndIdx === -1 ? value.length : lineEndIdx;
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+
+  // Detect prefix presence per line; for ordered lists, prefix is "N. "
+  const orderedRe = /^(\s*)\d+\. /;
+  const literalRe = new RegExp('^(\\s*)' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const allHave = lines.every(l => isOrdered ? orderedRe.test(l) : literalRe.test(l));
+
+  let newLines;
+  if (allHave) {
+    newLines = lines.map(l => l.replace(isOrdered ? orderedRe : literalRe, '$1'));
+  } else if (isOrdered) {
+    let n = 1;
+    newLines = lines.map(l => {
+      // If already has ordered prefix, renumber
+      const stripped = l.replace(orderedRe, '$1');
+      return stripped.replace(/^(\s*)/, `$1${n++}. `);
+    });
+  } else {
+    newLines = lines.map(l => {
+      // If line has a different list prefix, replace it instead of stacking
+      const cleaned = l.replace(/^(\s*)([-*+]\s+|\d+\.\s+|>\s+|- \[[ x]\]\s+)/, '$1');
+      return cleaned.replace(/^(\s*)/, `$1${prefix}`);
+    });
+  }
+  const replacement = newLines.join('\n');
+  textarea.setRangeText(replacement, lineStart, lineEnd, 'preserve');
+  textarea.setSelectionRange(lineStart, lineStart + replacement.length);
+  textarea.focus();
+  fireNotesInput();
+}
+
+function applyFormat(kind) {
+  const ta = sbNotes;
+  switch (kind) {
+    case 'bold':   replaceSelection(ta, '**', '**', 'bold text'); return;
+    case 'italic': replaceSelection(ta, '*', '*', 'italic text'); return;
+    case 'code':   replaceSelection(ta, '`', '`', 'code'); return;
+    case 'h2':     togglePrefix(ta, '## '); return;
+    case 'ul':     togglePrefix(ta, '- '); return;
+    case 'ol':     togglePrefix(ta, '', true); return;
+    case 'task':   togglePrefix(ta, '- [ ] '); return;
+    case 'quote':  togglePrefix(ta, '> '); return;
+    case 'link': {
+      const { selectionStart: s, selectionEnd: e, value } = ta;
+      const selected = value.slice(s, e) || 'text';
+      const replacement = `[${selected}](url)`;
+      ta.setRangeText(replacement, s, e, 'end');
+      const urlStart = s + selected.length + 3;
+      ta.setSelectionRange(urlStart, urlStart + 3);
+      ta.focus();
+      fireNotesInput();
+      return;
+    }
+  }
+}
+
+document.querySelectorAll('#sb-format-bar .sb-fmt-btn').forEach(btn => {
+  btn.addEventListener('mousedown', e => e.preventDefault()); // keep textarea focus
+  btn.addEventListener('click', () => applyFormat(btn.dataset.fmt));
+});
+
+// Tab indent / outdent within bullets and other line-prefixed blocks.
+function handleTabIndent(shift) {
+  const ta = sbNotes;
+  const { selectionStart: s, selectionEnd: e, value } = ta;
+  const lineStart = value.lastIndexOf('\n', s - 1) + 1;
+  const lineEndIdx = value.indexOf('\n', e);
+  const lineEnd = lineEndIdx === -1 ? value.length : lineEndIdx;
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+
+  let newLines;
+  if (shift) {
+    // Outdent: remove up to 2 leading spaces (or one tab) per line
+    newLines = lines.map(l => l.replace(/^( {1,2}|\t)/, ''));
+  } else {
+    // Indent: add 2 spaces per line
+    newLines = lines.map(l => '  ' + l);
+  }
+  const replacement = newLines.join('\n');
+  ta.setRangeText(replacement, lineStart, lineEnd, 'preserve');
+  // Restore a sensible selection after the edit
+  const delta = replacement.length - block.length;
+  ta.setSelectionRange(s + (shift ? Math.max(-2, delta) : 2), e + delta);
+  ta.focus();
+  fireNotesInput();
+}
+
+// On Enter, auto-continue lists/blockquotes. Returns true if handled.
+function handleListEnter() {
+  const ta = sbNotes;
+  const { selectionStart: s, selectionEnd: e, value } = ta;
+  if (s !== e) return false; // ignore when there's a selection
+  const lineStart = value.lastIndexOf('\n', s - 1) + 1;
+  const line = value.slice(lineStart, s);
+
+  // Patterns: "- ", "* ", "+ ", "N. ", "- [ ] ", "- [x] ", "> "
+  const m = line.match(/^(\s*)(- \[[ x]\] |[-*+] |\d+\. |> )(.*)$/);
+  if (!m) return false;
+
+  const [, indent, prefix, content] = m;
+
+  // Empty item — exit the list (remove the prefix and break out)
+  if (!content.trim()) {
+    ta.setRangeText('', lineStart, s, 'end');
+    fireNotesInput();
+    return true;
+  }
+
+  // Continue the list. Increment number for ordered lists, reset checkbox.
+  let nextPrefix = prefix;
+  if (/^\d+\. $/.test(prefix)) {
+    const n = parseInt(prefix);
+    nextPrefix = `${n + 1}. `;
+  } else if (/^- \[[ x]\] $/.test(prefix)) {
+    nextPrefix = '- [ ] ';
+  }
+
+  const insert = '\n' + indent + nextPrefix;
+  ta.setRangeText(insert, s, s, 'end');
+  fireNotesInput();
+  return true;
+}
 
 function refreshSidebarHighlights() {
   const header = document.getElementById('sb-hl-header');
@@ -1162,35 +1437,115 @@ function clearSearchHighlights() {
   });
 }
 
-// ── Export highlights as Markdown ─────────────────────────────────────
-async function exportHighlightsAsMarkdown() {
-  let md = `# ${currentTitle}\n\n`;
+// ── Copy annotations: Markdown / JSON / Plain text ───────────────────
+function toggleExportMenu() {
+  document.getElementById('export-menu').classList.toggle('hidden');
+}
+function hideExportMenu() {
+  document.getElementById('export-menu').classList.add('hidden');
+}
 
-  if (highlights.length) {
-    md += `## Highlights\n\n`;
-    const sorted = [...highlights].sort((a, b) =>
-      (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || (a.startOffset ?? 0) - (b.startOffset ?? 0)
-    );
+function getSortedHighlights() {
+  return [...highlights].sort((a, b) =>
+    (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || (a.startOffset ?? 0) - (b.startOffset ?? 0)
+  );
+}
+
+function buildMarkdownExport() {
+  const sorted = getSortedHighlights();
+  const notes = document.getElementById('sb-notes')?.value?.trim() || '';
+
+  let md = `# ${currentTitle || 'Untitled'}\n`;
+  if (currentAuthor) md += `*by ${currentAuthor}*\n`;
+  md += '\n';
+
+  if (sorted.length) {
+    md += `## Highlights (${sorted.length})\n\n`;
     for (const h of sorted) {
       md += `> ${h.text}\n`;
       if (h.latex) md += `>\n> **LaTeX:** \`${h.latex}\`\n`;
-      if (h.comment) md += `> — *${h.comment}*\n`;
+      if (h.comment) md += `>\n> **Note:** ${h.comment}\n`;
       const meta = [`Page ${(h.pageIndex ?? 0) + 1}`];
       if (h.color && h.color !== 'orange') meta.push(h.color);
-      md += `> *(${meta.join(', ')})*\n\n`;
+      md += `>\n> *${meta.join(' · ')}*\n\n`;
+    }
+  } else {
+    md += `## Highlights\n\n*(none)*\n\n`;
+  }
+
+  if (notes) md += `## Notes\n\n${notes}\n\n`;
+
+  md += `---\n*Exported from Marginalia on ${new Date().toISOString().slice(0, 10)}*\n`;
+  return md;
+}
+
+function buildJsonExport() {
+  const sorted = getSortedHighlights();
+  const notes = document.getElementById('sb-notes')?.value || '';
+  const payload = {
+    title: currentTitle || '',
+    author: currentAuthor || '',
+    pageKey: currentPageKey,
+    exportedAt: new Date().toISOString(),
+    highlightCount: sorted.length,
+    notes,
+    highlights: sorted.map(h => ({
+      id: h.id,
+      page: (h.pageIndex ?? 0) + 1,
+      text: h.text,
+      comment: h.comment || '',
+      color: h.color || 'orange',
+      ...(h.latex ? { latex: h.latex } : {}),
+      ...(h.timestamp ? { createdAt: h.timestamp } : {}),
+    })),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function buildPlainTextExport() {
+  const sorted = getSortedHighlights();
+  const notes = document.getElementById('sb-notes')?.value?.trim() || '';
+
+  const parts = [];
+  parts.push(currentTitle || 'Untitled');
+  if (currentAuthor) parts.push(`by ${currentAuthor}`);
+  parts.push('');
+
+  if (sorted.length) {
+    parts.push(`HIGHLIGHTS (${sorted.length})`);
+    parts.push('—'.repeat(40));
+    for (const h of sorted) {
+      parts.push(`[Page ${(h.pageIndex ?? 0) + 1}] "${h.text}"`);
+      if (h.comment) parts.push(`  Note: ${h.comment}`);
+      if (h.latex) parts.push(`  LaTeX: ${h.latex}`);
+      parts.push('');
     }
   }
 
-  const notes = document.getElementById('sb-notes')?.value?.trim();
   if (notes) {
-    md += `## Notes\n\n${notes}\n\n`;
+    parts.push('NOTES');
+    parts.push('—'.repeat(40));
+    parts.push(notes);
+    parts.push('');
   }
 
-  md += `---\n*Exported from Marginalia on ${new Date().toLocaleDateString()}*\n`;
+  return parts.join('\n');
+}
+
+async function copyAnnotations(format) {
+  let payload;
+  let label;
+  switch (format) {
+    case 'json':     payload = buildJsonExport();     label = 'JSON'; break;
+    case 'text':     payload = buildPlainTextExport(); label = 'Plain text'; break;
+    case 'markdown':
+    default:         payload = buildMarkdownExport(); label = 'Markdown'; break;
+  }
 
   try {
-    await navigator.clipboard.writeText(md);
-    showToast('Highlights copied to clipboard');
+    await navigator.clipboard.writeText(payload);
+    const count = highlights.length;
+    showToast(`${label} copied · ${count} highlight${count !== 1 ? 's' : ''}`);
   } catch {
     showToast('Failed to copy — check clipboard permissions');
   }

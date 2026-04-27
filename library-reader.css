@@ -130,6 +130,49 @@ body {
   cursor: pointer; font-family: var(--font);
 }
 
+/* ── Export / Copy menu ── */
+.export-wrap { position: relative; display: inline-block; }
+.export-btn .export-caret {
+  font-size: 9px;
+  margin-left: 2px;
+  color: var(--text-3);
+  transition: color 0.15s;
+}
+.export-btn:hover .export-caret { color: #fff; }
+.export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.export-menu.hidden { display: none; }
+.export-menu button {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--font);
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  transition: background 0.1s;
+}
+.export-menu button:hover { background: var(--surface-2); }
+.export-menu .export-menu-label { font-size: 12px; font-weight: 500; color: #fff; }
+.export-menu .export-menu-sub { font-size: 10px; color: var(--text-3); }
+
 /* ── Color picker ── */
 .color-picker { display: flex; align-items: center; gap: 4px; }
 .color-dot {
@@ -231,6 +274,9 @@ body {
   border-radius: 2px;
   cursor: pointer;
   color: transparent;
+  /* Marks at top level inherit position:absolute from inline style; ensure
+     they stay clickable independent of the .textLayer span rule. */
+  pointer-events: all;
 }
 .page-container .textLayer .oc-highlight:hover {
   background: rgba(232, 168, 124, 0.55);
@@ -314,6 +360,31 @@ body {
   padding: 12px 14px; gap: 8px; overflow: hidden;
 }
 .sb-edit-pane { display: flex; flex-direction: column; flex-shrink: 0; }
+.sb-format-bar {
+  display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
+  padding: 4px 0 6px;
+}
+.sb-fmt-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-3);
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all 0.1s;
+  min-width: 22px;
+  line-height: 1;
+}
+.sb-fmt-btn:hover { color: var(--accent); background: var(--surface-2); border-color: var(--border-2); }
+.sb-fmt-btn:active { background: var(--accent-dim); }
+.sb-fmt-bold { font-weight: 700; }
+.sb-fmt-italic { font-style: italic; }
+.sb-fmt-divider {
+  width: 1px; height: 14px; background: var(--border);
+  margin: 0 3px; flex-shrink: 0;
+}
 .sb-preview-pane {
   flex: 1; overflow-y: auto; padding: 8px;
   font-size: 13px; line-height: 1.6; color: var(--text);

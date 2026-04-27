@@ -41,7 +41,23 @@
       </div>
       <span class="toolbar-divider"></span>
       <button class="toolbar-btn" id="btn-highlight-mode" title="Toggle highlight mode (H)">Highlight</button>
-      <button class="toolbar-btn" id="btn-export" title="Export highlights as Markdown">Export</button>
+      <div class="export-wrap">
+        <button class="toolbar-btn export-btn" id="btn-export" title="Copy highlights + notes">Copy <span class="export-caret">▾</span></button>
+        <div class="export-menu hidden" id="export-menu" role="menu">
+          <button data-fmt="markdown" role="menuitem">
+            <span class="export-menu-label">Markdown</span>
+            <span class="export-menu-sub">Highlights, comments, notes</span>
+          </button>
+          <button data-fmt="json" role="menuitem">
+            <span class="export-menu-label">JSON</span>
+            <span class="export-menu-sub">Structured (for tooling)</span>
+          </button>
+          <button data-fmt="text" role="menuitem">
+            <span class="export-menu-label">Plain text</span>
+            <span class="export-menu-sub">Quotes only</span>
+          </button>
+        </div>
+      </div>
       <button class="toolbar-btn" id="btn-share" title="Share annotations">Share</button>
       <button class="toolbar-btn" id="btn-claude" title="Discuss with Claude">Claude</button>
       <button class="toolbar-btn" id="btn-sidebar" title="Toggle notes sidebar">Notes</button>
@@ -91,6 +107,19 @@
       </div>
       <div class="sb-body">
         <div class="sb-edit-pane" id="sb-edit-pane">
+          <div class="sb-format-bar" id="sb-format-bar">
+            <button class="sb-fmt-btn" data-fmt="h2" title="Heading">H</button>
+            <button class="sb-fmt-btn sb-fmt-bold" data-fmt="bold" title="Bold (⌘B)">B</button>
+            <button class="sb-fmt-btn sb-fmt-italic" data-fmt="italic" title="Italic (⌘I)">I</button>
+            <span class="sb-fmt-divider"></span>
+            <button class="sb-fmt-btn" data-fmt="ul" title="Bullet list">• List</button>
+            <button class="sb-fmt-btn" data-fmt="ol" title="Numbered list">1. List</button>
+            <button class="sb-fmt-btn" data-fmt="task" title="Task / checkbox">☐</button>
+            <span class="sb-fmt-divider"></span>
+            <button class="sb-fmt-btn" data-fmt="quote" title="Blockquote">&gt;</button>
+            <button class="sb-fmt-btn" data-fmt="code" title="Inline code">&lt;/&gt;</button>
+            <button class="sb-fmt-btn" data-fmt="link" title="Link">🔗</button>
+          </div>
           <textarea class="sb-textarea" id="sb-notes" placeholder="Key takeaways, thoughts, or insights... (supports Markdown and $LaTeX$)"></textarea>
         </div>
         <div class="sb-preview-pane hidden" id="sb-preview-pane"></div>

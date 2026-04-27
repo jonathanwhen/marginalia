@@ -179,6 +179,7 @@ html, body {
   border-radius: 2px;
   cursor: pointer;
   color: transparent;
+  pointer-events: all;
 }
 .page-container .textLayer .oc-highlight:hover {
   background: rgba(232, 168, 124, 0.55);
