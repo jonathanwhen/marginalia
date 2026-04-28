@@ -916,14 +916,23 @@
     if (!isContextValid()) return;
     try {
       const isYouTube = location.hostname === 'www.youtube.com' || location.hostname === 'youtube.com';
+      // When on a linked Claude conversation, pageKey() routes to the linked
+      // reading's pageKey (e.g. library:abc-... for the source PDF). Don't
+      // send title/url/author from claude.ai — they'd overwrite the source's
+      // metadata. The reading already exists, so we only need to touch it.
+      const isLinkedConversation = !!_resolvedPageKey;
       const msg = {
         type: 'oc-upsert-reading',
         pageKey: pageKey(),
-        title: document.title || pageKey(),
-        url: location.href
       };
+      if (!isLinkedConversation) {
+        msg.title = document.title || pageKey();
+        msg.url = location.href;
+      }
 
-      if (isYouTube) {
+      // Skip auto-derived metadata (author/estPages/duration) when linked —
+      // those belong to the source reading, not the claude.ai conversation page.
+      if (isYouTube && !isLinkedConversation) {
         // YouTube: extract channel name and video duration
         msg.mediaType = 'video';
         const channel = document.querySelector('#channel-name a')?.textContent?.trim()
@@ -937,7 +946,7 @@
           const m = durMeta.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
           if (m) msg.duration = (parseInt(m[1] || 0) * 60) + parseInt(m[2] || 0) + (parseInt(m[3] || 0) >= 30 ? 1 : 0);
         }
-      } else {
+      } else if (!isLinkedConversation) {
         msg.author =
           document.querySelector('meta[name="author"]')?.content ||
           document.querySelector('meta[property="article:author"]')?.content ||
@@ -1116,17 +1125,26 @@
 
   function saveSidebarNote(textarea, statusEl, convInput) {
     const notes = textarea.value.trim();
-    const conversationUrl = convInput?.value?.trim() || null;
     if (!isContextValid()) return;
+    // When on a linked conversation, don't overwrite the source reading's
+    // title/url with claude.ai metadata. Don't send conversationUrl either —
+    // it belongs to the source, not the conversation page itself, and
+    // convInput isn't shown when linked anyway.
+    const isLinkedConversation = !!_resolvedPageKey;
+    const msg = {
+      type: 'oc-upsert-reading',
+      pageKey: pageKey(),
+      notes,
+    };
+    if (!isLinkedConversation) {
+      msg.title = document.title || pageKey();
+      msg.url = location.href;
+      // Sidebar conversation URL input only exists on non-linked pages.
+      const conversationUrl = convInput?.value?.trim() || null;
+      msg.conversationUrl = conversationUrl;
+    }
     try {
-      chrome.runtime.sendMessage({
-        type: 'oc-upsert-reading',
-        pageKey: pageKey(),
-        title: document.title || pageKey(),
-        url: location.href,
-        notes,
-        conversationUrl
-      }, result => {
+      chrome.runtime.sendMessage(msg, result => {
         if (result?.ok) {
           statusEl.textContent = 'Saved';
           statusEl.className = 'oc-sb-status saved';

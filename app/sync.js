@@ -334,6 +334,13 @@ async function syncReadings() {
         tags: reading.tags, notes: reading.notes, estPages: reading.estPages,
         createdAt: reading.createdAt, updatedAt: reading.updatedAt,
         highlights: allHighlights[key] || [],
+        // Optional fields — only include when truthy, matching background.js
+        // so the GitHub payload doesn't strip Claude-conversation links,
+        // stars, or YouTube media metadata when Electron pushes.
+        ...(reading.conversationUrl ? { conversationUrl: reading.conversationUrl } : {}),
+        ...(reading.starred ? { starred: reading.starred } : {}),
+        ...(reading.mediaType ? { mediaType: reading.mediaType } : {}),
+        ...(reading.duration ? { duration: reading.duration } : {}),
         ...(reading.readingLog ? { readingLog: reading.readingLog } : {})
       };
     }
